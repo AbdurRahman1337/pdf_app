@@ -1,0 +1,8 @@
+.env
+node_modules/
+postgres_data/
+redis_data/
+chroma_data/
+ollama_data/
+lt_data/
+storage/uploads/

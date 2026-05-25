@@ -1,0 +1,28 @@
+# --- Server Core Framework ---
+fastapi>=0.100.0
+uvicorn[standard]>=0.22.0
+pydantic[email]>=2.0.0
+pydantic-settings>=2.0.0
+
+# --- Database & Migrations ---
+SQLAlchemy[asyncio]>=2.0.19
+asyncpg>=0.28.0
+alembic>=1.11.1
+
+# --- Background Task Processing ---
+celery[redis]>=5.3.1
+redis>=4.6.0
+
+# --- Advanced NLP & Parsing ---
+pymupdf>=1.22.5
+spacy>=3.6.0
+
+# --- AI & Vector Databases ---
+chromadb>=0.4.0
+sentence-transformers>=2.2.2
+httpx>=0.24.1
+
+# --- Security & Auth ---
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
