@@ -1,6 +1,6 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
-import { ChevronLeft, Send, Bot, User, BookOpen } from 'lucide-react-native';
+import React, { useState, useRef } from 'react';
+import { View, Text, TextInput, TouchableOpacity, ScrollView, KeyboardAvoidingView, Platform, ActivityIndicator, StyleSheet } from 'react-native';
+import { ChevronLeft, Send, Bot, BookOpen } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 
 const ChatScreen = ({ route, navigation }: any) => {
@@ -40,41 +40,41 @@ const ChatScreen = ({ route, navigation }: any) => {
     return (
         <KeyboardAvoidingView
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            className="flex-1 bg-dark-900 pt-12"
+            style={styles.container}
         >
-            <View className="flex-row items-center px-6 mb-4">
-                <TouchableOpacity onPress={() => navigation.goBack()} className="p-2 bg-dark-800 rounded-full">
+            <View style={styles.headerRow}>
+                <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
                     <ChevronLeft size={24} color="white" />
                 </TouchableOpacity>
-                <Text className="text-white text-xl font-bold ml-4">RAG Assistant</Text>
+                <Text style={styles.headerTitle}>RAG Assistant</Text>
             </View>
 
             <ScrollView
                 ref={scrollViewRef}
                 onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
-                className="flex-1 px-6"
+                style={styles.messageList}
                 contentContainerStyle={{ paddingBottom: 20 }}
             >
                 {messages.length === 0 ? (
-                    <View className="items-center mt-20 opacity-30">
-                        <Bot size={80} color="white" />
-                        <Text className="text-white text-center mt-4 text-lg">Ask anything about the document</Text>
+                    <View style={styles.emptyContainer}>
+                        <Bot size={80} color="rgba(255,255,255,0.3)" />
+                        <Text style={styles.emptyText}>Ask anything about the document</Text>
                     </View>
                 ) : (
                     messages.map((msg, i) => (
-                        <View key={i} className={`mb-6 flex-row ${msg.sender === 'user' ? 'justify-end' : 'justify-start'}`}>
-                            <View className={`max-w-[85%] p-4 rounded-3xl ${msg.sender === 'user' ? 'bg-primary rounded-tr-none' : 'bg-dark-800 rounded-tl-none border border-dark-700'}`}>
-                                <Text className={`${msg.sender === 'user' ? 'text-black' : 'text-white'} leading-6`}>
+                        <View key={i} style={[styles.messageRow, { justifyContent: msg.sender === 'user' ? 'flex-end' : 'flex-start' }]}>
+                            <View style={[styles.bubble, msg.sender === 'user' ? styles.userBubble : styles.aiBubble]}>
+                                <Text style={[styles.bubbleText, { color: msg.sender === 'user' ? '#000000' : '#ffffff' }]}>
                                     {msg.text}
                                 </Text>
                                 {msg.sources?.length > 0 && (
-                                    <View className="mt-4 pt-4 border-t border-white/10">
-                                        <View className="flex-row items-center mb-2">
+                                    <View style={styles.sources}>
+                                        <View style={styles.sourcesHeader}>
                                             <BookOpen size={12} color="#94a3b8" />
-                                            <Text className="text-gray-400 text-[10px] ml-1 font-bold">CITATIONS</Text>
+                                            <Text style={styles.sourcesLabel}>CITATIONS</Text>
                                         </View>
                                         {msg.sources.map((s: string, j: number) => (
-                                            <Text key={j} className="text-gray-500 text-[10px] mb-1 italic">
+                                            <Text key={j} style={styles.sourceItem}>
                                                 • {s.substring(0, 80)}...
                                             </Text>
                                         ))}
@@ -85,18 +85,18 @@ const ChatScreen = ({ route, navigation }: any) => {
                     ))
                 )}
                 {loading && (
-                    <View className="flex-row items-center mb-6">
-                        <View className="bg-dark-800 p-4 rounded-3xl rounded-tl-none border border-dark-700">
+                    <View style={styles.messageRow}>
+                        <View style={styles.aiBubble}>
                             <ActivityIndicator size="small" color="#38BDF8" />
                         </View>
                     </View>
                 )}
             </ScrollView>
 
-            <View className="p-6 bg-dark-800/50">
-                <View className="flex-row items-center bg-dark-800 border border-dark-700 rounded-2xl px-4 py-2">
+            <View style={styles.inputContainer}>
+                <View style={styles.inputRow}>
                     <TextInput
-                        className="flex-1 text-white p-2"
+                        style={styles.textInput}
                         placeholder="Ask a question..."
                         placeholderTextColor="#64748b"
                         value={input}
@@ -104,7 +104,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                         multiline
                     />
                     <TouchableOpacity
-                        className="bg-primary p-2 rounded-full ml-2"
+                        style={styles.sendBtn}
                         onPress={sendMessage}
                         disabled={loading}
                     >
@@ -115,5 +115,28 @@ const ChatScreen = ({ route, navigation }: any) => {
         </KeyboardAvoidingView>
     );
 };
+
+const styles = StyleSheet.create({
+    container: { flex: 1, backgroundColor: '#020617', paddingTop: 48 },
+    headerRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 24, marginBottom: 16 },
+    backBtn: { padding: 8, backgroundColor: '#0F172A', borderRadius: 999 },
+    headerTitle: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginLeft: 16 },
+    messageList: { flex: 1, paddingHorizontal: 24 },
+    emptyContainer: { alignItems: 'center', marginTop: 80, opacity: 0.3 },
+    emptyText: { color: '#ffffff', textAlign: 'center', marginTop: 16, fontSize: 16 },
+    messageRow: { flexDirection: 'row', marginBottom: 24 },
+    bubble: { maxWidth: '85%', padding: 16, borderRadius: 24 },
+    userBubble: { backgroundColor: '#38BDF8', borderTopRightRadius: 4 },
+    aiBubble: { backgroundColor: '#0F172A', borderTopLeftRadius: 4, borderWidth: 1, borderColor: '#1E293B' },
+    bubbleText: { lineHeight: 24 },
+    sources: { marginTop: 16, paddingTop: 16, borderTopWidth: 1, borderTopColor: 'rgba(255,255,255,0.1)' },
+    sourcesHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },
+    sourcesLabel: { color: '#94a3b8', fontSize: 10, marginLeft: 4, fontWeight: 'bold' },
+    sourceItem: { color: '#64748b', fontSize: 10, marginBottom: 4, fontStyle: 'italic' },
+    inputContainer: { padding: 24, backgroundColor: 'rgba(15,23,42,0.5)' },
+    inputRow: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#0F172A', borderWidth: 1, borderColor: '#1E293B', borderRadius: 16, paddingHorizontal: 16, paddingVertical: 8 },
+    textInput: { flex: 1, color: '#ffffff', padding: 8 },
+    sendBtn: { backgroundColor: '#38BDF8', padding: 8, borderRadius: 999, marginLeft: 8 },
+});
 
 export default ChatScreen;

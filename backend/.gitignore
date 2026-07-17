@@ -16,6 +16,9 @@ ollama_data/
 postgres_data/
 redis_data/
 
+# Firebase — NEVER commit service account keys!
+firebase_service_account.json
+
 # IDEs
 .vscode/
 .idea/

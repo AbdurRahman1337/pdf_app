@@ -1,51 +1,37 @@
 {
-    "expo": {
-        "name": "PDF AI Assistant",
-        "slug": "pdf-ai-assistant",
-        "version": "1.0.0",
-        "orientation": "portrait",
-        "icon": "./assets/icon.png",
-        "userInterfaceStyle": "dark",
-        "splash": {
-            "image": "./assets/splash.png",
-            "resizeMode": "contain",
-            "backgroundColor": "#020617"
-        },
-        "assetBundlePatterns": [
-            "**/*"
-        ],
-        "ios": {
-            "supportsTablet": true,
-            "bundleIdentifier": "com.robotboy.pdfapp",
-            "googleServicesFile": "./GoogleService-Info.plist"
-        },
-        "android": {
-            "adaptiveIcon": {
-                "foregroundImage": "./assets/adaptive-icon.png",
-                "backgroundColor": "#020617"
-            },
-            "package": "com.robotboy.pdfapp",
-            "googleServicesFile": "./google-services.json"
-        },
-        "web": {
-            "favicon": "./assets/favicon.png"
-        },
-        "plugins": [
-            "@react-native-firebase/app",
-            "@react-native-firebase/analytics",
-            "@react-native-firebase/auth",
-            "@react-native-firebase/crashlytics",
-            "@react-native-firebase/messaging",
-            [
-                "expo-build-properties",
-                {
-                    "android": {
-                        "compileSdkVersion": 34,
-                        "targetSdkVersion": 34,
-                        "buildToolsVersion": "34.0.0"
-                    }
-                }
-            ]
-        ]
+  "expo": {
+    "name": "PDF INSIGHTS",
+    "slug": "pdf-insights",
+    "version": "1.0.0",
+    "sdkVersion": "54.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "dark",
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.robotboy.pdfapp"
+    },
+    "android": {
+      "package": "com.robotboy.pdfapp",
+      "googleServicesFile": "./google-services.json",
+      "adaptiveIcon": {
+        "backgroundColor": "#020617"
+      }
+    },
+    "web": {
+      "bundler": "metro"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
+    ],
+    "owner": "abdurrahman1337-2",
+    "extra": {
+      "eas": {
+        "projectId": "caa611df-feee-4be0-bd51-34b7ed6ef308"
+      }
     }
+  }
 }

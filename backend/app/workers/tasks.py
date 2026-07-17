@@ -15,7 +15,11 @@ logger = logging.getLogger("celery_worker")
 def get_async_loop():
     """Returns working asyncio execution loops or initializes a new process wrapper."""
     try:
-        return asyncio.get_event_loop()
+        loop = asyncio.get_event_loop()
+        if loop.is_closed():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop
     except RuntimeError:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
@@ -30,28 +34,31 @@ def process_pdf_task(pdf_id: str) -> str:
     """
     logger.info(f"Incoming Background Processing command for PDF uuid: {pdf_id}")
     
-    loop = get_async_loop()
-    result = loop.run_until_complete(_async_process_pdf(pdf_id))
-    return result
+    # asyncio.run handles the complete lifecycle gracefully and safely
+    return asyncio.run(_async_process_pdf(pdf_id))
 
 
 async def _async_process_pdf(pdf_id: str) -> str:
     """Async engine executor handling file parsing and ML pipelines."""
     # 1. Fetch record from database
     async with AsyncSessionLocal() as session:
-        result = await session.execute(
-            select(PDFRecord).where(PDFRecord.id == pdf_id)
-        )
-        pdf_record = result.scalars().first()
-        if not pdf_record:
-            logger.error(f"Requested PDF Record ({pdf_id}) was not located inside Postgres instance.")
-            return "FAILED_NOT_FOUND"
+        try:
+            result = await session.execute(
+                select(PDFRecord).where(PDFRecord.id == pdf_id)
+            )
+            pdf_record = result.scalars().first()
+            if not pdf_record:
+                logger.error(f"Requested PDF Record ({pdf_id}) was not located inside Postgres instance.")
+                return "FAILED_NOT_FOUND"
 
-        # Update process state to active processing status
-        pdf_record.process_status = "PROCESSING"
-        await session.commit()
-        
-        storage_path = pdf_record.storage_path
+            # Update process state to active processing status
+            pdf_record.process_status = "PROCESSING"
+            await session.commit()
+            
+            storage_path = pdf_record.storage_path
+        except Exception as e:
+            logger.error(f"Failed loading PDF definition mapping Database: {str(e)}")
+            return f"FAILED_DB_ERROR: {str(e)}"
 
         try:
             # 2. Extract texts using low-level PyMuPDF engine
@@ -99,6 +106,10 @@ async def _async_process_pdf(pdf_id: str) -> str:
 
         except Exception as e:
             logger.error(f"Failed PDF pipelines parsing: {str(e)}")
+            # Rollback first if the active transaction was aborted/corrupted
+            await session.rollback()
             pdf_record.process_status = "FAILED"
+            # Add object back since it might be detached from rollback
+            session.add(pdf_record)
             await session.commit()
             return f"FAILED_PIPELINE_ERROR: {str(e)}"

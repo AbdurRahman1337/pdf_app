@@ -1,5 +1,11 @@
+/**
+ * Axios HTTP Client
+ *
+ * Attaches a fresh Firebase ID Token (auto-refreshed) to every request.
+ * Falls back gracefully if no user is signed in.
+ */
 import axios, { InternalAxiosRequestConfig } from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import auth from '@react-native-firebase/auth';
 
 const API_BASE_URL = 'http://localhost:8000/api/v1';
 
@@ -9,9 +15,11 @@ const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-    const token = await AsyncStorage.getItem('access_token');
-    if (token) {
-        config.headers.Authorization = `Bearer ${token}`;
+    const currentUser = auth().currentUser;
+    if (currentUser) {
+        // getIdToken(true) forces a refresh if the token is expired
+        const idToken = await currentUser.getIdToken(false);
+        config.headers.Authorization = `Bearer ${idToken}`;
     }
     return config;
 });
