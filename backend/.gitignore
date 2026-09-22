@@ -6,18 +6,28 @@ __pycache__/
 venv/
 ENV/
 .env
+.env.*
+!.env.example
+.pytest_cache/
 
-# Vector DB & Storage
+# Vector DB & Storage (Never commit binary vector DB / SQLite files!)
 storage/
 embeddings/
 chroma_data/
+chroma_db/
 lt_data/
 ollama_data/
 postgres_data/
 redis_data/
+*.sqlite3
+*.bin
 
-# Firebase — NEVER commit service account keys!
-firebase_service_account.json
+# Firebase & Cloud Credentials — NEVER commit service account keys!
+firebase_service_account*.json
+pdf-app-*.json
+*-adminsdk-*.json
+serviceAccountKey.json
+service-account*.json
 
 # IDEs
 .vscode/

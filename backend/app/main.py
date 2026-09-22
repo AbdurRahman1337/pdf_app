@@ -1,27 +1,28 @@
-from fastapi import FastAPI, Request
+import os
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse, HTMLResponse
 
-from app.core.config import settings
-from app.core.logging import setup_logging
-from app.core.cache import get_redis_client
-
-# Import backend module presentation routes
-from app.modules.auth.presentation.routers import router as auth_router
-from app.modules.pdf.presentation.routers import router as pdf_router
-from app.modules.ai.presentation.routers import router as ai_router
-
-# Setup logger configuration
-setup_logging()
+from app.config import settings
+from app.middleware.rate_limiter import SlidingWindowRateLimiter
+from app.middleware.error_handler import register_error_handlers
+from app.api.routes_health import router as health_router
+from app.api.routes_upload import router as upload_router
+from app.api.routes_chat import router as chat_router
+from app.api.routes_quiz import router as quiz_router
+from app.api.routes_mobile_compat import router as mobile_compat_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
-    openapi_url=f"{settings.API_V1_STR}/openapi.json",
+    version=settings.API_VERSION,
+    description="AI Study Assistant Full-Stack RAG System API",
     docs_url="/docs",
     redoc_url="/redoc",
+    openapi_url="/openapi.json",
 )
 
-# Apply CORS configurations
+# 1. Register CORS Middleware
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -30,43 +31,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# 2. Register Sliding-Window Rate Limiter
+app.add_middleware(SlidingWindowRateLimiter)
 
-@app.on_event("startup")
-async def startup_event():
-    """Initializes external engines like Redis connections on startup triggers."""
-    get_redis_client()
+# 3. Register Global Exception Handlers
+register_error_handlers(app)
 
+# 4. Include Core API Routers
+app.include_router(health_router)
+app.include_router(upload_router)
+app.include_router(chat_router)
+app.include_router(quiz_router)
+app.include_router(mobile_compat_router)
 
-@app.on_event("shutdown")
-async def shutdown_event():
-    """Cleans up system linkages during shutdown calls."""
-    redis_client = get_redis_client()
-    await redis_client.close()
+# Also expose under /api and /api/v1 prefixes for standard client setups & mobile
+app.include_router(health_router, prefix="/api")
+app.include_router(upload_router, prefix="/api")
+app.include_router(chat_router, prefix="/api")
+app.include_router(quiz_router, prefix="/api")
+app.include_router(mobile_compat_router, prefix="/api")
+app.include_router(mobile_compat_router, prefix="/api/v1")
 
+# 5. Static Files and Frontend Single Page App serving
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+if os.path.exists(static_dir):
+    app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    """
-    Guarantees clean, json-safe responses are always delivered
-    to the frontend clients in case of unhandled server exceptions.
-    """
-    return JSONResponse(
-        status_code=500,
-        content={"detail": "An internal server error occurred.", "err_msg": str(exc)},
-    )
+    @app.get("/", response_class=HTMLResponse, include_in_schema=False)
+    async def serve_index():
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return HTMLResponse("<h2>AI Study Assistant Backend Active</h2><p>Visit <a href='/docs'>/docs</a> for API documentation.</p>")
 
-
-# Register all active routers to unified v1 root path
-app.include_router(auth_router, prefix=settings.API_V1_STR)
-app.include_router(pdf_router, prefix=settings.API_V1_STR)
-app.include_router(ai_router, prefix=settings.API_V1_STR)
-
-
-@app.get("/health", tags=["Health"])
-async def health_check():
-    """Root system diagnostics routes."""
-    return {
-        "status": "Green",
-        "service": settings.PROJECT_NAME,
-        "environment": settings.ENVIRONMENT,
-    }
+    @app.get("/{full_path:path}", include_in_schema=False)
+    async def catch_all_spa(full_path: str):
+        # Don't intercept api, docs, or schema routes
+        if full_path.startswith(("api/", "docs", "redoc", "openapi.json", "health", "upload", "documents", "chat", "quiz", "pdf", "ai")):
+            return None
+        file_candidate = os.path.join(static_dir, full_path)
+        if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
+            return FileResponse(file_candidate)
+        index_path = os.path.join(static_dir, "index.html")
+        if os.path.exists(index_path):
+            return FileResponse(index_path)
+        return HTMLResponse("<h2>AI Study Assistant</h2>")
