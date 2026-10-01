@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
     View,
     Text,
@@ -7,11 +7,15 @@ import {
     ActivityIndicator,
     ScrollView,
     StyleSheet,
+    Image,
+    KeyboardAvoidingView,
+    Platform,
 } from 'react-native';
-import { FileText } from 'lucide-react-native';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, Zap } from 'lucide-react-native';
 import authService from '../../../core/auth/authService';
+import { useTheme } from '../../../core/theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
 
-// Map Firebase error codes to human-friendly messages
 const friendlyError = (code?: string): string => {
     switch (code) {
         case 'auth/invalid-email':
@@ -27,17 +31,21 @@ const friendlyError = (code?: string): string => {
         case 'auth/too-many-requests':
             return 'Too many failed attempts. Please try again later.';
         case 'auth/network-request-failed':
-            return 'Network error. Check your connection.';
+            return 'Network error. Check your server connection.';
         default:
             return 'Authentication failed. Please try again.';
     }
 };
 
 const AuthScreen = ({ navigation }: any) => {
+    const { colors, shadows } = useTheme();
+    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
 
@@ -45,7 +53,7 @@ const AuthScreen = ({ navigation }: any) => {
         setError('');
 
         if (!email.trim() || !password.trim()) {
-            setError('Please fill in all fields.');
+            setError('Please fill in all required fields.');
             return;
         }
 
@@ -61,26 +69,11 @@ const AuthScreen = ({ navigation }: any) => {
 
         setLoading(true);
         try {
-            let authUser;
             if (isLogin) {
-                // ── Sign In ─────────────────────────────────────────────
-                authUser = await authService.signInWithEmailAndPassword(email.trim(), password);
+                await authService.signInWithEmailAndPassword(email.trim(), password);
             } else {
-                // ── Register ────────────────────────────────────────────
-                authUser = await authService.createUserWithEmailAndPassword(
-                    email.trim(),
-                    password
-                );
+                await authService.createUserWithEmailAndPassword(email.trim(), password);
                 setIsLogin(true);
-            }
-            if (authUser) {
-                const token = await authUser.getIdToken();
-                console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-                console.log('🔑 [LOGGED IN - COPY THIS TOKEN FOR SWAGGER UI]');
-                console.log(`Bearer Token : ${token}`);
-                console.log(`X-Session-ID : ${authUser.uid}`);
-                console.log(`Email        : ${authUser.email}`);
-                console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
             }
             navigation.replace('Dashboard');
         } catch (err: any) {
@@ -93,13 +86,7 @@ const AuthScreen = ({ navigation }: any) => {
     const handleGuestLogin = async () => {
         setLoading(true);
         try {
-            const guestUser = await authService.continueAsGuest();
-            const token = await guestUser.getIdToken();
-            console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('🔑 [GUEST LOGIN - COPY THIS TOKEN FOR SWAGGER UI]');
-            console.log(`Bearer Token : ${token}`);
-            console.log(`X-Session-ID : ${guestUser.uid}`);
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
+            await authService.continueAsGuest();
             navigation.replace('Dashboard');
         } catch (err: any) {
             setError('Failed to enter as guest.');
@@ -109,220 +96,390 @@ const AuthScreen = ({ navigation }: any) => {
     };
 
     return (
-        <ScrollView contentContainerStyle={styles.scrollContainer}>
-            {/* ── Logo ── */}
-            <View style={styles.logoContainer}>
-                <View style={styles.iconWrapper}>
-                    <FileText size={60} color="#38BDF8" />
-                </View>
-                <Text style={styles.title}>PDF AI Assistant</Text>
-                <Text style={styles.subtitle}>Enterprise Summarization & RAG Engine</Text>
-                <View style={authService.isFirebaseAvailable ? styles.firebaseBadge : styles.expoBadge}>
-                    <Text style={authService.isFirebaseAvailable ? styles.firebaseBadgeText : styles.expoBadgeText}>
-                        {authService.isFirebaseAvailable
-                            ? '🔐 Secured by Firebase Auth'
-                            : '📱 Expo Go Mode (Guest / Dev Session)'}
-                    </Text>
-                </View>
-            </View>
-
-            {/* ── Error Banner ── */}
-            {error ? (
-                <View style={styles.errorBox}>
-                    <Text style={styles.errorText}>⚠️  {error}</Text>
-                </View>
-            ) : null}
-
-            {/* ── Form ── */}
-            <View style={styles.form}>
-                <Text style={styles.label}>Email Address</Text>
-                <TextInput
-                    style={styles.input}
-                    placeholder="name@company.com"
-                    placeholderTextColor="#64748b"
-                    value={email}
-                    onChangeText={setEmail}
-                    autoCapitalize="none"
-                    keyboardType="email-address"
-                    autoCorrect={false}
-                />
-
-                <Text style={[styles.label, { marginTop: 16 }]}>Password</Text>
-                <TextInput
-                    style={styles.input}
-                    placeholder="••••••••"
-                    placeholderTextColor="#64748b"
-                    value={password}
-                    onChangeText={setPassword}
-                    secureTextEntry
-                />
-
-                {/* Confirm password only shown on Register */}
-                {!isLogin && (
-                    <>
-                        <Text style={[styles.label, { marginTop: 16 }]}>Confirm Password</Text>
-                        <TextInput
-                            style={styles.input}
-                            placeholder="••••••••"
-                            placeholderTextColor="#64748b"
-                            value={confirmPassword}
-                            onChangeText={setConfirmPassword}
-                            secureTextEntry
+        <KeyboardAvoidingView
+            style={styles.container}
+            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+            <ScrollView
+                contentContainerStyle={styles.scrollContainer}
+                showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+            >
+                {/* ── Brand Header ── */}
+                <View style={styles.brandContainer}>
+                    <View style={styles.logoBadge}>
+                        <Image
+                            source={require('../../../../assets/main.png')}
+                            style={styles.logoImage}
                         />
-                    </>
-                )}
-
-                <TouchableOpacity
-                    style={[styles.button, { opacity: loading ? 0.65 : 1 }]}
-                    onPress={handleAuth}
-                    disabled={loading}
-                >
-                    {loading ? (
-                        <ActivityIndicator color="#000000" />
-                    ) : (
-                        <Text style={styles.buttonText}>
-                            {isLogin ? 'Sign In' : 'Create Account'}
-                        </Text>
-                    )}
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                    style={styles.guestButton}
-                    onPress={handleGuestLogin}
-                    disabled={loading}
-                >
-                    <Text style={styles.guestButtonText}>⚡ Continue as Guest (Instant Access)</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity onPress={() => { setIsLogin(!isLogin); setError(''); }} style={styles.switchBtn}>
-                    <Text style={styles.switchText}>
-                        {isLogin
-                            ? "Don't have an account?  Sign Up →"
-                            : 'Already have an account?  Sign In →'}
+                    </View>
+                    <Text style={styles.brandTitle}>PDF AI Study Hub</Text>
+                    <Text style={styles.brandSubtitle}>
+                        Synthesize documents, extract key vocabulary, and query notes with RAG.
                     </Text>
-                </TouchableOpacity>
-            </View>
-        </ScrollView>
+
+                    <View style={authService.isFirebaseAvailable ? styles.authStatusBadgeFirebase : styles.authStatusBadgeExpo}>
+                        <ShieldCheck
+                            size={13}
+                            color={authService.isFirebaseAvailable ? colors.warning : colors.accent}
+                            style={{ marginRight: 5 }}
+                        />
+                        <Text style={authService.isFirebaseAvailable ? styles.badgeTextFirebase : styles.badgeTextExpo}>
+                            {authService.isFirebaseAvailable
+                                ? 'Firebase Auth Active'
+                                : 'Expo Dev Session (Guest Ready)'}
+                        </Text>
+                    </View>
+                </View>
+
+                {/* ── Form Card ── */}
+                <View style={styles.card}>
+                    <View style={styles.cardNav}>
+                        <TouchableOpacity
+                            style={[styles.cardNavTab, isLogin && styles.cardNavTabActive]}
+                            onPress={() => { setIsLogin(true); setError(''); }}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={[styles.cardNavText, isLogin && styles.cardNavTextActive]}>
+                                Sign In
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[styles.cardNavTab, !isLogin && styles.cardNavTabActive]}
+                            onPress={() => { setIsLogin(false); setError(''); }}
+                            activeOpacity={0.7}
+                        >
+                            <Text style={[styles.cardNavText, !isLogin && styles.cardNavTextActive]}>
+                                Create Account
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
+
+                    {/* Error Banner */}
+                    {error ? (
+                        <View style={styles.errorBox}>
+                            <Text style={styles.errorText}>{error}</Text>
+                        </View>
+                    ) : null}
+
+                    {/* Inputs */}
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>Email Address</Text>
+                        <View style={styles.inputWrapper}>
+                            <Mail size={17} color={colors.textMuted} style={styles.inputIcon} />
+                            <TextInput
+                                style={styles.input}
+                                placeholder="student@university.edu"
+                                placeholderTextColor={colors.textSubtle}
+                                value={email}
+                                onChangeText={setEmail}
+                                autoCapitalize="none"
+                                keyboardType="email-address"
+                                autoCorrect={false}
+                            />
+                        </View>
+                    </View>
+
+                    <View style={styles.inputGroup}>
+                        <Text style={styles.inputLabel}>Password</Text>
+                        <View style={styles.inputWrapper}>
+                            <Lock size={17} color={colors.textMuted} style={styles.inputIcon} />
+                            <TextInput
+                                style={[styles.input, { paddingRight: 40 }]}
+                                placeholder="Enter password"
+                                placeholderTextColor={colors.textSubtle}
+                                value={password}
+                                onChangeText={setPassword}
+                                secureTextEntry={!showPassword}
+                            />
+                            <TouchableOpacity
+                                style={styles.passwordToggle}
+                                onPress={() => setShowPassword(!showPassword)}
+                                activeOpacity={0.7}
+                            >
+                                {showPassword ? (
+                                    <EyeOff size={17} color={colors.textMuted} />
+                                ) : (
+                                    <Eye size={17} color={colors.textMuted} />
+                                )}
+                            </TouchableOpacity>
+                        </View>
+                    </View>
+
+                    {!isLogin && (
+                        <View style={styles.inputGroup}>
+                            <Text style={styles.inputLabel}>Confirm Password</Text>
+                            <View style={styles.inputWrapper}>
+                                <Lock size={17} color={colors.textMuted} style={styles.inputIcon} />
+                                <TextInput
+                                    style={styles.input}
+                                    placeholder="Repeat password"
+                                    placeholderTextColor={colors.textSubtle}
+                                    value={confirmPassword}
+                                    onChangeText={setConfirmPassword}
+                                    secureTextEntry={!showPassword}
+                                />
+                            </View>
+                        </View>
+                    )}
+
+                    {/* Primary Button */}
+                    <TouchableOpacity
+                        style={[styles.primaryBtn, loading && { opacity: 0.7 }]}
+                        onPress={handleAuth}
+                        disabled={loading}
+                        activeOpacity={0.85}
+                    >
+                        {loading ? (
+                            <ActivityIndicator color={colors.textInverse} size="small" />
+                        ) : (
+                            <View style={styles.btnContent}>
+                                <Text style={styles.primaryBtnText}>
+                                    {isLogin ? 'Sign In' : 'Create Account'}
+                                </Text>
+                                <ArrowRight size={17} color={colors.textInverse} style={{ marginLeft: 6 }} />
+                            </View>
+                        )}
+                    </TouchableOpacity>
+
+                    {/* Divider */}
+                    <View style={styles.dividerRow}>
+                        <View style={styles.dividerLine} />
+                        <Text style={styles.dividerText}>or continue with</Text>
+                        <View style={styles.dividerLine} />
+                    </View>
+
+                    {/* Instant Guest Mode Button */}
+                    <TouchableOpacity
+                        style={styles.guestBtn}
+                        onPress={handleGuestLogin}
+                        disabled={loading}
+                        activeOpacity={0.8}
+                    >
+                        <Zap size={16} color={colors.accent} style={{ marginRight: 8 }} />
+                        <Text style={styles.guestBtnText}>Instant Guest Session</Text>
+                    </TouchableOpacity>
+                </View>
+
+                {/* Footer Note */}
+                <Text style={styles.footerNote}>
+                    Document vectors and study data are securely partitioned per session.
+                </Text>
+            </ScrollView>
+        </KeyboardAvoidingView>
     );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) => StyleSheet.create({
+    container: {
+        flex: 1,
+        backgroundColor: colors.bg,
+    },
     scrollContainer: {
         flexGrow: 1,
-        backgroundColor: '#020617',
         justifyContent: 'center',
-        paddingHorizontal: 32,
-        paddingVertical: 48,
+        paddingHorizontal: spacing.lg,
+        paddingVertical: spacing.xxl,
     },
-    logoContainer: {
+    brandContainer: {
         alignItems: 'center',
-        marginBottom: 40,
+        marginBottom: spacing.xl,
     },
-    iconWrapper: {
-        backgroundColor: 'rgba(56,189,248,0.1)',
-        padding: 24,
-        borderRadius: 999,
-        marginBottom: 16,
+    logoBadge: {
+        width: 72,
+        height: 72,
+        borderRadius: radii.xl,
+        backgroundColor: colors.surface,
+        borderWidth: 1,
+        borderColor: colors.borderLight,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginBottom: spacing.md,
+        ...shadows.card,
     },
-    title: {
-        color: '#ffffff',
-        fontSize: 28,
-        fontWeight: 'bold',
+    logoImage: {
+        width: 52,
+        height: 52,
+        resizeMode: 'contain',
     },
-    subtitle: {
-        color: '#94a3b8',
+    brandTitle: {
+        color: colors.text,
+        fontSize: typography.sizes.xxl,
+        fontWeight: '700',
+        letterSpacing: -0.5,
+    },
+    brandSubtitle: {
+        color: colors.textMuted,
+        fontSize: typography.sizes.sm,
         textAlign: 'center',
-        marginTop: 8,
+        lineHeight: 20,
+        maxWidth: 320,
+        marginTop: spacing.xs,
     },
-    firebaseBadge: {
-        backgroundColor: 'rgba(251,146,60,0.12)',
+    authStatusBadgeFirebase: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.warningMuted,
         borderWidth: 1,
-        borderColor: 'rgba(251,146,60,0.3)',
-        paddingHorizontal: 14,
+        borderColor: 'rgba(245, 158, 11, 0.25)',
+        paddingHorizontal: spacing.md,
         paddingVertical: 5,
-        borderRadius: 999,
-        marginTop: 14,
+        borderRadius: radii.full,
+        marginTop: spacing.sm,
     },
-    firebaseBadgeText: {
-        color: '#fb923c',
-        fontSize: 12,
+    authStatusBadgeExpo: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.accentMuted,
+        borderWidth: 1,
+        borderColor: colors.accentBorder,
+        paddingHorizontal: spacing.md,
+        paddingVertical: 5,
+        borderRadius: radii.full,
+        marginTop: spacing.sm,
+    },
+    badgeTextFirebase: {
+        color: colors.warning,
+        fontSize: typography.sizes.xs,
         fontWeight: '600',
     },
-    expoBadge: {
-        backgroundColor: 'rgba(56,189,248,0.12)',
-        borderWidth: 1,
-        borderColor: 'rgba(56,189,248,0.3)',
-        paddingHorizontal: 14,
-        paddingVertical: 5,
-        borderRadius: 999,
-        marginTop: 14,
-    },
-    expoBadgeText: {
-        color: '#38BDF8',
-        fontSize: 12,
+    badgeTextExpo: {
+        color: colors.accent,
+        fontSize: typography.sizes.xs,
         fontWeight: '600',
+    },
+    card: {
+        backgroundColor: colors.surface,
+        borderRadius: radii.xl,
+        borderWidth: 1,
+        borderColor: colors.border,
+        padding: spacing.lg,
+        ...shadows.card,
+    },
+    cardNav: {
+        flexDirection: 'row',
+        backgroundColor: colors.surfaceSubtle,
+        borderRadius: radii.md,
+        padding: 3,
+        marginBottom: spacing.lg,
+    },
+    cardNavTab: {
+        flex: 1,
+        paddingVertical: 9,
+        alignItems: 'center',
+        borderRadius: radii.sm,
+    },
+    cardNavTabActive: {
+        backgroundColor: colors.surfaceRaised,
+        ...shadows.card,
+    },
+    cardNavText: {
+        color: colors.textMuted,
+        fontSize: typography.sizes.sm,
+        fontWeight: '600',
+    },
+    cardNavTextActive: {
+        color: colors.text,
+        fontWeight: '700',
     },
     errorBox: {
-        backgroundColor: 'rgba(239,68,68,0.1)',
+        backgroundColor: colors.dangerMuted,
         borderWidth: 1,
-        borderColor: 'rgba(239,68,68,0.5)',
-        padding: 16,
-        borderRadius: 12,
-        marginBottom: 24,
+        borderColor: 'rgba(239, 68, 68, 0.3)',
+        borderRadius: radii.md,
+        padding: spacing.sm,
+        marginBottom: spacing.md,
     },
     errorText: {
-        color: '#ef4444',
+        color: colors.danger,
+        fontSize: typography.sizes.xs,
         textAlign: 'center',
-    },
-    form: {},
-    label: {
-        color: '#94a3b8',
-        marginBottom: 8,
-        marginLeft: 4,
         fontWeight: '500',
+    },
+    inputGroup: {
+        marginBottom: spacing.md,
+    },
+    inputLabel: {
+        color: colors.textSecondary,
+        fontSize: typography.sizes.xs,
+        fontWeight: '600',
+        marginBottom: 6,
+        marginLeft: 2,
+    },
+    inputWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: radii.md,
+        paddingHorizontal: spacing.sm,
+    },
+    inputIcon: {
+        marginRight: 8,
     },
     input: {
-        backgroundColor: '#0F172A',
+        flex: 1,
+        color: colors.text,
+        fontSize: typography.sizes.md,
+        paddingVertical: 12,
+    },
+    passwordToggle: {
+        padding: 6,
+    },
+    primaryBtn: {
+        backgroundColor: colors.accent,
+        borderRadius: radii.md,
+        paddingVertical: 14,
+        alignItems: 'center',
+        justifyContent: 'center',
+        marginTop: spacing.xs,
+        ...shadows.glowAccent,
+    },
+    btnContent: {
+        flexDirection: 'row',
+        alignItems: 'center',
+    },
+    primaryBtnText: {
+        color: colors.textInverse,
+        fontSize: typography.sizes.md,
+        fontWeight: '700',
+    },
+    dividerRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginVertical: spacing.lg,
+    },
+    dividerLine: {
+        flex: 1,
+        height: 1,
+        backgroundColor: colors.border,
+    },
+    dividerText: {
+        color: colors.textSubtle,
+        fontSize: typography.sizes.xs,
+        paddingHorizontal: spacing.sm,
+    },
+    guestBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        backgroundColor: colors.accentMuted,
         borderWidth: 1,
-        borderColor: '#1E293B',
-        color: '#ffffff',
-        padding: 16,
-        borderRadius: 12,
+        borderColor: colors.accentBorder,
+        borderRadius: radii.md,
+        paddingVertical: 12,
     },
-    button: {
-        backgroundColor: '#38BDF8',
-        padding: 16,
-        borderRadius: 12,
-        marginTop: 24,
-        alignItems: 'center',
+    guestBtnText: {
+        color: colors.accent,
+        fontSize: typography.sizes.sm,
+        fontWeight: '700',
     },
-    buttonText: {
-        color: '#000000',
-        fontWeight: 'bold',
-        fontSize: 18,
-    },
-    guestButton: {
-        borderWidth: 1,
-        borderColor: 'rgba(56,189,248,0.4)',
-        backgroundColor: 'rgba(56,189,248,0.06)',
-        padding: 14,
-        borderRadius: 12,
-        marginTop: 14,
-        alignItems: 'center',
-    },
-    guestButtonText: {
-        color: '#38BDF8',
-        fontWeight: '600',
-        fontSize: 15,
-    },
-    switchBtn: {
-        alignItems: 'center',
-        marginTop: 18,
-        paddingVertical: 8,
-    },
-    switchText: {
-        color: '#38BDF8',
-        fontWeight: '500',
+    footerNote: {
+        color: colors.textSubtle,
+        fontSize: typography.sizes.xs,
+        textAlign: 'center',
+        marginTop: spacing.xl,
     },
 });
 

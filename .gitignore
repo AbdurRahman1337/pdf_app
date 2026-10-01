@@ -4,17 +4,21 @@
 !.env.example
 *.env
 
-# Credentials & Service Accounts
+# Credentials, Service Accounts & OAuth Secrets
 firebase_service_account*.json
 pdf-app-*.json
 *-adminsdk-*.json
 pc-api-key.json
+*client_secret*.json
+google_client_secret*.json
 *.keystore
 *.jks
 
 # Google Services Config (Sensitive API keys)
 google-services.json
 GoogleService-Info.plist
+!mobile/google-services.json
+!admin_panel/google-services.json
 
 # Node & Frontend
 node_modules/

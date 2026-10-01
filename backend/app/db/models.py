@@ -41,7 +41,10 @@ class UploadResponse(BaseModel):
     total_chunks: int
     total_characters: int
     session_id: str
-    message: str = "File uploaded and indexed successfully"
+    storage_provider: str = "google_drive"
+    drive_file_id: Optional[str] = None
+    drive_web_view_link: Optional[str] = None
+    message: str = "File uploaded to Google Drive and indexed successfully"
 
 
 class QuizQuestion(BaseModel):
@@ -53,7 +56,8 @@ class QuizQuestion(BaseModel):
 
 
 class QuizGenerateRequest(BaseModel):
-    topic: str = Field(..., min_length=1, description="Subject or concept to quiz on")
+    topic: str = Field(default="General Concepts", description="Subject or concept to quiz on")
+    pdf_id: Optional[str] = Field(default=None, description="Target document ID if scoped to a specific PDF")
     num_questions: int = Field(default=5, ge=1, le=15, description="Number of questions to generate (e.g. 3, 5, 10)")
     session_id: Optional[str] = Field(default=None, description="Client session identifier")
 
@@ -70,6 +74,9 @@ class DocumentInfo(BaseModel):
     filename: str
     chunk_count: int
     uploaded_at: Optional[str] = None
+    storage_provider: str = "google_drive"
+    drive_file_id: Optional[str] = None
+    drive_web_view_link: Optional[str] = None
 
 
 class DocumentListResponse(BaseModel):

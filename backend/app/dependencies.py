@@ -18,7 +18,6 @@ async def get_current_user(
     """
     if credentials and credentials.credentials:
         token = credentials.credentials
-        logger.info(f"🔑 [BACKEND AUTH] Received Bearer Token: {token}")
         return {
             "user_id": "student_user_1",
             "email": "student@academy.edu",

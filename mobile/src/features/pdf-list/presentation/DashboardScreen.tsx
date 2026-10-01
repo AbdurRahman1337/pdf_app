@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
     View,
     Text,
@@ -8,6 +8,8 @@ import {
     RefreshControl,
     StyleSheet,
     Modal,
+    TextInput,
+    Alert,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import {
@@ -18,10 +20,18 @@ import {
     Layers,
     LogOut,
     UploadCloud,
-    Sparkles,
+    Search,
+    X,
+    Trash2,
+    CheckCircle2,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import authService from '../../../core/auth/authService';
+import { useTheme } from '../../../core/theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
+import StatusChip from '../../../core/components/StatusChip';
+import EmptyState from '../../../core/components/EmptyState';
+import { CardSkeleton } from '../../../core/components/LoadingSkeleton';
 
 const formatTitle = (name?: string) => {
     if (!name) return 'Untitled Document';
@@ -32,19 +42,45 @@ const formatTitle = (name?: string) => {
     }
 };
 
+const formatSize = (bytes?: number) => {
+    if (!bytes || isNaN(bytes)) return '1.2 MB';
+    if (bytes < 1024 * 1024) {
+        return `${(bytes / 1024).toFixed(1)} KB`;
+    }
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+};
+
+const formatDate = (dateStr?: string) => {
+    if (!dateStr) return 'Recently';
+    try {
+        const d = new Date(dateStr);
+        if (isNaN(d.getTime())) return 'Recently';
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    } catch {
+        return 'Recently';
+    }
+};
+
 const DashboardScreen = ({ navigation }: any) => {
+    const { colors, shadows } = useTheme();
+    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+
     const [pdfs, setPdfs] = useState<any[]>([]);
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
+    const [searchQuery, setSearchQuery] = useState('');
+
+    // Upload & Ingestion Staged Progress State
     const [isUploading, setIsUploading] = useState(false);
     const [uploadingName, setUploadingName] = useState('');
+    const [uploadStage, setUploadStage] = useState<1 | 2 | 3 | 4>(1);
 
     const fetchPdfs = async () => {
         try {
             const response = await apiClient.get('/pdf/list');
-            setPdfs(response.data);
+            setPdfs(response.data || []);
         } catch (err) {
-            console.error(err);
+            console.error('Failed to fetch PDFs:', err);
         } finally {
             setLoading(false);
             setRefreshing(false);
@@ -55,10 +91,19 @@ const DashboardScreen = ({ navigation }: any) => {
         fetchPdfs();
     }, []);
 
+    const filteredPdfs = useMemo(() => {
+        if (!searchQuery.trim()) return pdfs;
+        const q = searchQuery.toLowerCase();
+        return pdfs.filter((p) => {
+            const name = formatTitle(p.original_name || p.title || '').toLowerCase();
+            return name.includes(q);
+        });
+    }, [pdfs, searchQuery]);
+
     const handleUpload = async () => {
         try {
             const result = await DocumentPicker.getDocumentAsync({
-                type: 'application/pdf',
+                type: ['application/pdf', 'text/plain', 'text/markdown'],
                 copyToCacheDirectory: true,
             });
 
@@ -67,108 +112,172 @@ const DashboardScreen = ({ navigation }: any) => {
                 const cleanName = formatTitle(file.name);
                 setUploadingName(cleanName);
                 setIsUploading(true);
+                setUploadStage(1);
+
+                // Stage 1 -> Stage 2: Reading pages & extracting
+                const stageTimer2 = setTimeout(() => setUploadStage(2), 700);
+                const stageTimer3 = setTimeout(() => setUploadStage(3), 1600);
 
                 const formData = new FormData();
                 // @ts-ignore
                 formData.append('file', {
                     uri: file.uri,
                     name: file.name,
-                    type: 'application/pdf',
+                    type: file.mimeType || 'application/pdf',
                 });
 
                 await apiClient.post('/pdf/upload', formData, {
                     headers: { 'Content-Type': 'multipart/form-data' },
                 });
 
-                await fetchPdfs();
+                clearTimeout(stageTimer2);
+                clearTimeout(stageTimer3);
+                setUploadStage(4);
+
+                // Short delay to show "Ready" completion
+                setTimeout(async () => {
+                    setIsUploading(false);
+                    setUploadingName('');
+                    await fetchPdfs();
+                }, 800);
             }
         } catch (err: any) {
             console.error('Upload error:', err);
-            alert('Upload failed: ' + (err?.response?.data?.detail || err?.message || 'Could not upload PDF'));
-        } finally {
+            Alert.alert(
+                'Upload Issue',
+                err?.response?.data?.detail || err?.message || 'Could not upload PDF. Please try again.'
+            );
             setIsUploading(false);
             setUploadingName('');
         }
     };
 
+    const handleDelete = (docId: string, title: string) => {
+        Alert.alert(
+            'Delete Document',
+            `Are you sure you want to remove "${formatTitle(title)}" from your study library?`,
+            [
+                { text: 'Cancel', style: 'cancel' },
+                {
+                    text: 'Delete',
+                    style: 'destructive',
+                    onPress: async () => {
+                        // Optimistically remove from list immediately
+                        setPdfs((prev) => prev.filter((p) => (p.id || p.doc_id) !== docId));
+                        try {
+                            await apiClient.delete(`/pdf/${docId}`);
+                        } catch (err) {
+                            try {
+                                await apiClient.delete(`/documents/${docId}`);
+                            } catch (e) {
+                                console.error('Delete error:', e);
+                            }
+                        } finally {
+                            await fetchPdfs();
+                        }
+                    },
+                },
+            ]
+        );
+    };
+
     const renderItem = ({ item }: { item: any }) => {
-        const cleanName = formatTitle(item.original_name);
-        const isCompleted = item.process_status === 'COMPLETED';
+        const cleanName = formatTitle(item.original_name || item.title);
+        const isCompleted = item.process_status !== 'FAILED' && item.process_status !== 'ERROR';
 
         return (
             <View style={styles.card}>
+                {/* Header Row */}
                 <View style={styles.cardHeader}>
-                    <View
-                        style={[
-                            styles.iconBg,
-                            {
-                                backgroundColor: isCompleted
-                                    ? 'rgba(56,189,248,0.12)'
-                                    : 'rgba(234,179,8,0.12)',
-                            },
-                        ]}
-                    >
-                        <FileText
-                            size={24}
-                            color={isCompleted ? '#38BDF8' : '#EAB308'}
-                        />
+                    <View style={styles.docThumbnail}>
+                        <FileText size={22} color={colors.accent} />
+                        <Text style={styles.docTypeBadge}>PDF</Text>
                     </View>
+
                     <View style={styles.cardInfo}>
-                        <Text style={styles.cardTitle} numberOfLines={1}>
+                        <Text style={styles.cardTitle} numberOfLines={2}>
                             {cleanName}
                         </Text>
-                        <Text style={styles.cardMeta}>
-                            {item.process_status} • {(item.size_bytes / 1024).toFixed(1)} KB
-                        </Text>
+                        <View style={styles.cardMetaRow}>
+                            <Text style={styles.cardMeta}>
+                                {formatSize(item.size_bytes)} • {formatDate(item.created_at)}
+                            </Text>
+                            <StatusChip status={item.process_status} size="sm" />
+                        </View>
                     </View>
+
+                    <TouchableOpacity
+                        style={styles.deleteBtn}
+                        onPress={() => handleDelete(item.id, cleanName)}
+                        activeOpacity={0.7}
+                    >
+                        <Trash2 size={16} color={colors.textSubtle} />
+                    </TouchableOpacity>
                 </View>
 
+                {/* Lens Navigation Actions */}
                 {isCompleted ? (
                     <View style={styles.actions}>
                         <TouchableOpacity
-                            style={styles.actionBtn}
+                            style={[styles.actionBtn, styles.summaryBtn]}
                             onPress={() =>
                                 navigation.navigate('Summary', {
                                     pdfId: item.id,
-                                    title: item.original_name,
+                                    title: item.original_name || item.title,
                                 })
                             }
                             activeOpacity={0.7}
                         >
-                            <Layers size={19} color="#818CF8" />
-                            <Text style={styles.actionLabel}>Summary</Text>
+                            <Layers size={14} color={colors.indigo} />
+                            <Text style={[styles.actionLabel, { color: colors.indigo }]}>Summary</Text>
                         </TouchableOpacity>
+
                         <TouchableOpacity
-                            style={styles.actionBtn}
+                            style={[styles.actionBtn, styles.vocabBtn]}
                             onPress={() =>
                                 navigation.navigate('Vocabulary', {
                                     pdfId: item.id,
-                                    title: item.original_name,
+                                    title: item.original_name || item.title,
                                 })
                             }
                             activeOpacity={0.7}
                         >
-                            <BookOpen size={19} color="#2DD4BF" />
-                            <Text style={styles.actionLabel}>Vocab</Text>
+                            <BookOpen size={14} color={colors.teal} />
+                            <Text style={[styles.actionLabel, { color: colors.teal }]}>Vocab</Text>
                         </TouchableOpacity>
+
                         <TouchableOpacity
-                            style={styles.actionBtn}
+                            style={[styles.actionBtn, styles.quizBtn]}
+                            onPress={() =>
+                                navigation.navigate('Quizzes', {
+                                    pdfId: item.id,
+                                    title: item.original_name || item.title,
+                                })
+                            }
+                            activeOpacity={0.7}
+                        >
+                            <Text style={{ fontSize: 13, marginRight: 2 }}>🎓</Text>
+                            <Text style={[styles.actionLabel, { color: colors.accent }]}>Quiz</Text>
+                        </TouchableOpacity>
+
+                        <TouchableOpacity
+                            style={[styles.actionBtn, styles.chatBtn]}
                             onPress={() =>
                                 navigation.navigate('Chat', {
                                     pdfId: item.id,
-                                    title: item.original_name,
+                                    title: item.original_name || item.title,
                                 })
                             }
                             activeOpacity={0.7}
                         >
-                            <MessageSquare size={19} color="#38BDF8" />
-                            <Text style={styles.actionLabel}>RAG Chat</Text>
+                            <MessageSquare size={14} color={colors.accent} />
+                            <Text style={[styles.actionLabel, { color: colors.accent }]}>Tutor</Text>
                         </TouchableOpacity>
                     </View>
                 ) : (
                     <View style={styles.processingRow}>
-                        <ActivityIndicator size="small" color="#EAB308" />
-                        <Text style={styles.processingText}>Processing document...</Text>
+                        <ActivityIndicator size="small" color={colors.warning} />
+                        <Text style={styles.processingText}>Indexing document in background...</Text>
                     </View>
                 )}
             </View>
@@ -178,45 +287,68 @@ const DashboardScreen = ({ navigation }: any) => {
     return (
         <View style={styles.container}>
             {/* ── Top App Bar ── */}
-            <View style={styles.header}>
+            <View style={styles.topBar}>
                 <View>
-                    <Text style={styles.welcomeText}>Welcome Back</Text>
-                    <Text style={styles.workspaceText}>PDF Knowledge Base</Text>
+                    <Text style={styles.greetingText}>Knowledge Library</Text>
+                    <Text style={styles.workspaceTitle}>Study Workspace</Text>
                 </View>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+
+                <View style={styles.topBarActions}>
                     <TouchableOpacity
-                        style={[styles.uploadBtn, { backgroundColor: '#1E293B', marginRight: 10 }]}
+                        style={styles.signOutBtn}
                         onPress={async () => {
                             await authService.signOut();
                             navigation.replace('Auth');
                         }}
                         activeOpacity={0.7}
+                        accessibilityLabel="Sign Out"
                     >
-                        <LogOut size={18} color="#94A3B8" />
+                        <LogOut size={18} color={colors.textMuted} />
                     </TouchableOpacity>
+
                     <TouchableOpacity
-                        style={styles.uploadBtn}
+                        style={styles.uploadPrimaryBtn}
                         onPress={handleUpload}
                         disabled={isUploading}
-                        activeOpacity={0.8}
+                        activeOpacity={0.85}
                     >
-                        <Plus size={22} color="#020617" />
+                        <Plus size={18} color={colors.textInverse} style={{ marginRight: 6 }} />
+                        <Text style={styles.uploadBtnText}>Upload PDF</Text>
                     </TouchableOpacity>
                 </View>
             </View>
 
-            {/* ── PDF List / Loading ── */}
+            {/* ── Search Bar ── */}
+            <View style={styles.searchWrapper}>
+                <Search size={16} color={colors.textSubtle} style={{ marginRight: 8 }} />
+                <TextInput
+                    style={styles.searchInput}
+                    placeholder="Search documents by title..."
+                    placeholderTextColor={colors.textSubtle}
+                    value={searchQuery}
+                    onChangeText={setSearchQuery}
+                />
+                {searchQuery.length > 0 && (
+                    <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
+                        <X size={16} color={colors.textMuted} />
+                    </TouchableOpacity>
+                )}
+            </View>
+
+            {/* ── Document List ── */}
             {loading && !refreshing ? (
-                <View style={styles.centered}>
-                    <ActivityIndicator size="large" color="#38BDF8" />
+                <View style={styles.skeletonContainer}>
+                    <CardSkeleton />
+                    <CardSkeleton />
+                    <CardSkeleton />
                 </View>
             ) : (
                 <FlatList
-                    data={pdfs}
+                    data={filteredPdfs}
                     renderItem={renderItem}
                     keyExtractor={(item) => item.id}
                     showsVerticalScrollIndicator={false}
-                    contentContainerStyle={{ paddingBottom: 40 }}
+                    contentContainerStyle={styles.listContent}
                     refreshControl={
                         <RefreshControl
                             refreshing={refreshing}
@@ -224,46 +356,129 @@ const DashboardScreen = ({ navigation }: any) => {
                                 setRefreshing(true);
                                 fetchPdfs();
                             }}
-                            tintColor="#38BDF8"
+                            tintColor={colors.accent}
                         />
                     }
                     ListEmptyComponent={
-                        <View style={styles.emptyContainer}>
-                            <View style={styles.emptyIconBg}>
-                                <FileText size={48} color="rgba(56,189,248,0.4)" />
-                            </View>
-                            <Text style={styles.emptyText}>No documents indexed yet</Text>
-                            <Text style={styles.emptySub}>
-                                Upload your study notes, books, or papers to generate summaries and start AI chat.
-                            </Text>
-                            <TouchableOpacity
-                                style={styles.emptyBtn}
-                                onPress={handleUpload}
-                                disabled={isUploading}
-                                activeOpacity={0.8}
-                            >
-                                <Plus size={18} color="#020617" style={{ marginRight: 6 }} />
-                                <Text style={styles.emptyBtnText}>Upload First PDF</Text>
-                            </TouchableOpacity>
-                        </View>
+                        searchQuery ? (
+                            <EmptyState
+                                icon={Search}
+                                title="No matching documents"
+                                description={`No indexed PDFs found matching "${searchQuery}".`}
+                                actionLabel="Clear Search"
+                                onAction={() => setSearchQuery('')}
+                            />
+                        ) : (
+                            <EmptyState
+                                icon={FileText}
+                                title="No documents indexed yet"
+                                description="Upload a study PDF, research paper, or textbook to generate multi-paragraph summaries, study vocabulary, and chat with AI."
+                                actionLabel="Upload First PDF"
+                                actionIcon={Plus}
+                                onAction={handleUpload}
+                            />
+                        )
                     }
                 />
             )}
 
-            {/* ── Upload Buffering Overlay ── */}
+            {/* ── Staged Upload Modal ── */}
             <Modal visible={isUploading} transparent animationType="fade">
                 <View style={styles.modalOverlay}>
                     <View style={styles.uploadModalCard}>
                         <View style={styles.uploadIconWrapper}>
-                            <UploadCloud size={32} color="#38BDF8" />
+                            <UploadCloud size={30} color={colors.accent} />
                         </View>
-                        <ActivityIndicator size="large" color="#38BDF8" style={{ marginVertical: 16 }} />
-                        <Text style={styles.uploadModalTitle}>Uploading & Indexing PDF</Text>
+
+                        <Text style={styles.uploadModalTitle}>Ingesting Document</Text>
                         <Text style={styles.uploadDocName} numberOfLines={1}>
                             {uploadingName}
                         </Text>
+
+                        {/* Staged Stepper */}
+                        <View style={styles.stepperContainer}>
+                            {/* Step 1 */}
+                            <View style={styles.stepItem}>
+                                <View
+                                    style={[
+                                        styles.stepDot,
+                                        uploadStage >= 1 && styles.stepDotActive,
+                                        uploadStage > 1 && styles.stepDotDone,
+                                    ]}
+                                >
+                                    {uploadStage > 1 ? (
+                                        <CheckCircle2 size={12} color={colors.textInverse} />
+                                    ) : (
+                                        <Text style={styles.stepNum}>1</Text>
+                                    )}
+                                </View>
+                                <Text style={[styles.stepText, uploadStage >= 1 && styles.stepTextActive]}>
+                                    Uploading PDF
+                                </Text>
+                            </View>
+
+                            {/* Step 2 */}
+                            <View style={styles.stepItem}>
+                                <View
+                                    style={[
+                                        styles.stepDot,
+                                        uploadStage >= 2 && styles.stepDotActive,
+                                        uploadStage > 2 && styles.stepDotDone,
+                                    ]}
+                                >
+                                    {uploadStage > 2 ? (
+                                        <CheckCircle2 size={12} color={colors.textInverse} />
+                                    ) : (
+                                        <Text style={styles.stepNum}>2</Text>
+                                    )}
+                                </View>
+                                <Text style={[styles.stepText, uploadStage >= 2 && styles.stepTextActive]}>
+                                    Reading & Chunking Pages
+                                </Text>
+                            </View>
+
+                            {/* Step 3 */}
+                            <View style={styles.stepItem}>
+                                <View
+                                    style={[
+                                        styles.stepDot,
+                                        uploadStage >= 3 && styles.stepDotActive,
+                                        uploadStage > 3 && styles.stepDotDone,
+                                    ]}
+                                >
+                                    {uploadStage > 3 ? (
+                                        <CheckCircle2 size={12} color={colors.textInverse} />
+                                    ) : (
+                                        <Text style={styles.stepNum}>3</Text>
+                                    )}
+                                </View>
+                                <Text style={[styles.stepText, uploadStage >= 3 && styles.stepTextActive]}>
+                                    Building Vector Index
+                                </Text>
+                            </View>
+
+                            {/* Step 4 */}
+                            <View style={styles.stepItem}>
+                                <View
+                                    style={[
+                                        styles.stepDot,
+                                        uploadStage === 4 && styles.stepDotDone,
+                                    ]}
+                                >
+                                    {uploadStage === 4 ? (
+                                        <CheckCircle2 size={12} color={colors.textInverse} />
+                                    ) : (
+                                        <Text style={styles.stepNum}>4</Text>
+                                    )}
+                                </View>
+                                <Text style={[styles.stepText, uploadStage === 4 && styles.stepTextActive]}>
+                                    AI Knowledge Ready
+                                </Text>
+                            </View>
+                        </View>
+
                         <Text style={styles.uploadModalDesc}>
-                            Extracting text chunks, generating vector embeddings, and creating your AI study hub...
+                            Extracting text chunks, generating vector embeddings, and creating your AI study workspace.
                         </Text>
                     </View>
                 </View>
@@ -272,187 +487,287 @@ const DashboardScreen = ({ navigation }: any) => {
     );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) => StyleSheet.create({
     container: {
         flex: 1,
-        backgroundColor: '#020617',
-        paddingHorizontal: 20,
-        paddingTop: 48,
+        backgroundColor: colors.bg,
+        paddingTop: 50,
     },
-    header: {
+    topBar: {
         flexDirection: 'row',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: 24,
+        paddingHorizontal: spacing.lg,
+        marginBottom: spacing.md,
     },
-    welcomeText: {
-        color: '#94a3b8',
-        fontSize: 13,
-        fontWeight: '500',
+    greetingText: {
+        color: colors.textMuted,
+        fontSize: typography.sizes.xs,
+        fontWeight: '600',
+        textTransform: 'uppercase',
+        letterSpacing: 0.8,
     },
-    workspaceText: {
-        color: '#ffffff',
-        fontSize: 22,
-        fontWeight: 'bold',
+    workspaceTitle: {
+        color: colors.text,
+        fontSize: typography.sizes.xl,
+        fontWeight: '700',
         marginTop: 2,
     },
-    uploadBtn: {
-        backgroundColor: '#38BDF8',
-        padding: 11,
-        borderRadius: 999,
-        justifyContent: 'center',
+    topBarActions: {
+        flexDirection: 'row',
         alignItems: 'center',
     },
-    centered: {
-        flex: 1,
+    signOutBtn: {
+        width: 38,
+        height: 38,
+        borderRadius: radii.md,
+        backgroundColor: colors.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: colors.border,
         justifyContent: 'center',
         alignItems: 'center',
+        marginRight: spacing.xs,
+    },
+    uploadPrimaryBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.accent,
+        paddingHorizontal: 14,
+        paddingVertical: 9,
+        borderRadius: radii.md,
+        ...shadows.glowAccent,
+    },
+    uploadBtnText: {
+        color: colors.textInverse,
+        fontSize: typography.sizes.sm,
+        fontWeight: '700',
+    },
+    searchWrapper: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: colors.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: colors.border,
+        borderRadius: radii.md,
+        marginHorizontal: spacing.lg,
+        paddingHorizontal: spacing.sm,
+        paddingVertical: 8,
+        marginBottom: spacing.md,
+    },
+    searchInput: {
+        flex: 1,
+        color: colors.text,
+        fontSize: typography.sizes.sm,
+        padding: 0,
+    },
+    skeletonContainer: {
+        paddingHorizontal: spacing.lg,
+    },
+    listContent: {
+        paddingHorizontal: spacing.lg,
+        paddingBottom: 95,
     },
     card: {
-        backgroundColor: '#0F172A',
+        backgroundColor: colors.surface,
         borderWidth: 1,
-        borderColor: '#1E293B',
-        padding: 18,
-        borderRadius: 20,
-        marginBottom: 14,
+        borderColor: colors.border,
+        borderRadius: radii.lg,
+        padding: spacing.md,
+        marginBottom: spacing.md,
+        ...shadows.card,
     },
     cardHeader: {
         flexDirection: 'row',
-        alignItems: 'center',
-        marginBottom: 14,
+        alignItems: 'flex-start',
+        marginBottom: spacing.sm,
     },
-    iconBg: {
-        padding: 12,
-        borderRadius: 14,
+    docThumbnail: {
+        width: 44,
+        height: 48,
+        borderRadius: radii.sm,
+        backgroundColor: colors.accentMuted,
+        borderWidth: 1,
+        borderColor: colors.accentBorder,
+        justifyContent: 'center',
+        alignItems: 'center',
+        position: 'relative',
+    },
+    docTypeBadge: {
+        position: 'absolute',
+        bottom: 2,
+        fontSize: 8,
+        fontWeight: '800',
+        color: colors.accent,
+        letterSpacing: 0.5,
     },
     cardInfo: {
         flex: 1,
-        marginLeft: 14,
+        marginLeft: 12,
+        marginRight: 6,
     },
     cardTitle: {
-        color: '#ffffff',
-        fontWeight: 'bold',
-        fontSize: 15,
+        color: colors.text,
+        fontWeight: '700',
+        fontSize: typography.sizes.base,
+        lineHeight: 20,
+    },
+    cardMetaRow: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        marginTop: 6,
     },
     cardMeta: {
-        color: '#94a3b8',
-        fontSize: 12,
-        marginTop: 3,
+        color: colors.textMuted,
+        fontSize: typography.sizes.xs,
+    },
+    deleteBtn: {
+        padding: 6,
+        borderRadius: radii.sm,
     },
     actions: {
         flexDirection: 'row',
-        justifyContent: 'space-between',
+        gap: 8,
+        marginTop: spacing.xs,
+        paddingTop: spacing.sm,
         borderTopWidth: 1,
-        borderTopColor: '#1E293B',
-        paddingTop: 12,
+        borderTopColor: colors.border,
     },
     actionBtn: {
-        alignItems: 'center',
         flex: 1,
-        paddingVertical: 4,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 8,
+        borderRadius: radii.sm,
+        borderWidth: 1,
+    },
+    summaryBtn: {
+        backgroundColor: colors.indigoMuted,
+        borderColor: colors.indigo,
+    },
+    vocabBtn: {
+        backgroundColor: colors.tealMuted,
+        borderColor: colors.teal,
+    },
+    quizBtn: {
+        backgroundColor: colors.accentMuted,
+        borderColor: colors.accent,
+    },
+    chatBtn: {
+        backgroundColor: colors.surfaceSubtle,
+        borderColor: colors.borderLight,
     },
     actionLabel: {
-        color: '#94a3b8',
-        fontSize: 11,
-        marginTop: 4,
-        fontWeight: '600',
+        fontSize: typography.sizes.xs,
+        fontWeight: '700',
+        marginLeft: 4,
     },
     processingRow: {
         flexDirection: 'row',
         alignItems: 'center',
         justifyContent: 'center',
         paddingVertical: 8,
+        marginTop: spacing.xs,
     },
     processingText: {
-        color: '#EAB308',
+        color: colors.warning,
         marginLeft: 8,
-        fontSize: 12,
-    },
-    emptyContainer: {
-        alignItems: 'center',
-        marginTop: 60,
-        paddingHorizontal: 20,
-    },
-    emptyIconBg: {
-        width: 88,
-        height: 88,
-        borderRadius: 44,
-        backgroundColor: 'rgba(56,189,248,0.08)',
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: 18,
-    },
-    emptyText: {
-        color: '#ffffff',
-        fontSize: 18,
-        fontWeight: 'bold',
-        textAlign: 'center',
-    },
-    emptySub: {
-        color: '#64748B',
-        fontSize: 13,
-        lineHeight: 20,
-        textAlign: 'center',
-        marginTop: 8,
-        marginBottom: 24,
-    },
-    emptyBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: '#38BDF8',
-        paddingVertical: 13,
-        paddingHorizontal: 24,
-        borderRadius: 999,
-    },
-    emptyBtnText: {
-        color: '#020617',
-        fontWeight: 'bold',
-        fontSize: 14,
+        fontSize: typography.sizes.xs,
+        fontWeight: '500',
     },
     modalOverlay: {
         flex: 1,
-        backgroundColor: 'rgba(2, 6, 23, 0.82)',
+        backgroundColor: colors.overlay,
         justifyContent: 'center',
         alignItems: 'center',
-        paddingHorizontal: 24,
+        paddingHorizontal: spacing.lg,
     },
     uploadModalCard: {
-        backgroundColor: '#0F172A',
+        backgroundColor: colors.surfaceRaised,
         borderWidth: 1,
-        borderColor: '#1E293B',
-        borderRadius: 24,
-        padding: 28,
+        borderColor: colors.borderLight,
+        borderRadius: radii.xl,
+        padding: spacing.xl,
         alignItems: 'center',
         width: '100%',
-        maxWidth: 340,
+        maxWidth: 360,
+        ...shadows.modal,
     },
     uploadIconWrapper: {
-        width: 60,
-        height: 60,
-        borderRadius: 30,
-        backgroundColor: 'rgba(56,189,248,0.12)',
+        width: 56,
+        height: 56,
+        borderRadius: radii.full,
+        backgroundColor: colors.accentMuted,
+        borderWidth: 1,
+        borderColor: colors.accentBorder,
         justifyContent: 'center',
         alignItems: 'center',
+        marginBottom: spacing.md,
     },
     uploadModalTitle: {
-        color: '#ffffff',
-        fontSize: 17,
-        fontWeight: 'bold',
+        color: colors.text,
+        fontSize: typography.sizes.lg,
+        fontWeight: '700',
         textAlign: 'center',
     },
     uploadDocName: {
-        color: '#38BDF8',
-        fontSize: 13,
+        color: colors.accent,
+        fontSize: typography.sizes.sm,
         fontWeight: '600',
-        marginTop: 6,
+        marginTop: 4,
         textAlign: 'center',
     },
+    stepperContainer: {
+        width: '100%',
+        marginTop: spacing.lg,
+        marginBottom: spacing.md,
+        paddingHorizontal: spacing.sm,
+    },
+    stepItem: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        marginBottom: 10,
+    },
+    stepDot: {
+        width: 22,
+        height: 22,
+        borderRadius: 11,
+        backgroundColor: colors.surfaceSubtle,
+        borderWidth: 1,
+        borderColor: colors.border,
+        justifyContent: 'center',
+        alignItems: 'center',
+        marginRight: 10,
+    },
+    stepDotActive: {
+        borderColor: colors.accent,
+        backgroundColor: colors.accentMuted,
+    },
+    stepDotDone: {
+        backgroundColor: colors.success,
+        borderColor: colors.success,
+    },
+    stepNum: {
+        fontSize: 10,
+        fontWeight: '700',
+        color: colors.textMuted,
+    },
+    stepText: {
+        fontSize: typography.sizes.xs,
+        color: colors.textMuted,
+        fontWeight: '500',
+    },
+    stepTextActive: {
+        color: colors.text,
+        fontWeight: '700',
+    },
     uploadModalDesc: {
-        color: '#94A3B8',
-        fontSize: 12,
+        color: colors.textSubtle,
+        fontSize: typography.sizes.xs,
         lineHeight: 18,
         textAlign: 'center',
-        marginTop: 10,
+        marginTop: spacing.xs,
     },
 });
 

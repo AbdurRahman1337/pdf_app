@@ -6,9 +6,11 @@ from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
 from app.db.models import UploadResponse, DocumentListResponse, DocumentInfo
 from app.db.vector_store import vector_store
 from app.db.firestore_service import firestore_service
+from app.db.google_drive_service import google_drive_service
 from app.core.chunking import get_token_chunks
 from app.utils.file_parser import extract_text_from_file
 from app.dependencies import get_session_id
+from fastapi import Header
 
 router = APIRouter(tags=["Documents & Ingestion"])
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
@@ -19,10 +21,11 @@ async def upload_document(
     file: UploadFile = File(...),
     session_id_form: Optional[str] = Form(default=None, alias="session_id"),
     resolved_session_id: str = Depends(get_session_id),
+    google_access_token: Optional[str] = Header(default=None, alias="X-Google-Access-Token"),
 ):
     """
     Ingests and indexes a study document (.pdf, .txt, .md up to 25MB).
-    Extracts text, splits into token-aware chunks, and saves to vector store with session isolation.
+    Uploads raw file to Google Drive, splits into token-aware chunks, and saves metadata to Firestore.
     """
     session_id = session_id_form.strip() if (session_id_form and session_id_form.strip()) else resolved_session_id
 
@@ -36,6 +39,15 @@ async def upload_document(
     filename = file.filename or "uploaded_note.txt"
     extracted_text = extract_text_from_file(filename=filename, file_bytes=content_bytes)
 
+    # 1. Upload raw file to Google Drive (Storage)
+    mime_type = file.content_type or ("text/plain" if filename.endswith((".txt", ".md")) else "application/pdf")
+    drive_result = google_drive_service.upload_file(
+        filename=filename,
+        file_bytes=content_bytes,
+        mime_type=mime_type,
+        user_access_token=google_access_token
+    )
+
     doc_id = str(uuid.uuid4())
     uploaded_at = datetime.now(timezone.utc).isoformat()
 
@@ -46,6 +58,7 @@ async def upload_document(
             "session_id": session_id,
             "filename": filename,
             "uploaded_at": uploaded_at,
+            "drive_file_id": drive_result.get("drive_file_id", ""),
         }
     )
 
@@ -65,7 +78,7 @@ async def upload_document(
         ids=chunk_ids
     )
 
-    # 1. Save Book to Firestore 'books' collection
+    # 2. Save Book to Firestore 'books' collection with Google Drive links
     firestore_service.save_book({
         "id": doc_id,
         "doc_id": doc_id,
@@ -73,6 +86,11 @@ async def upload_document(
         "original_name": filename,
         "session_id": session_id,
         "user_id": session_id,
+        "storage_provider": "google_drive",
+        "drive_file_id": drive_result.get("drive_file_id"),
+        "drive_folder_id": drive_result.get("drive_folder_id"),
+        "drive_web_view_link": drive_result.get("drive_web_view_link"),
+        "drive_web_content_link": drive_result.get("drive_web_content_link"),
         "size_bytes": len(content_bytes),
         "chunk_count": len(chunks),
         "total_characters": len(extracted_text),
@@ -80,12 +98,14 @@ async def upload_document(
         "created_at": uploaded_at,
     })
 
-    # 2. Record UPLOAD_AND_INDEX operation
+    # 3. Record UPLOAD_AND_INDEX operation
     firestore_service.record_book_operation(
         doc_id=doc_id,
         op_type="UPLOAD_AND_INDEX",
         details={
             "filename": filename,
+            "storage_provider": "google_drive",
+            "drive_file_id": drive_result.get("drive_file_id"),
             "chunk_count": len(chunks),
             "total_characters": len(extracted_text),
             "size_bytes": len(content_bytes),
@@ -98,7 +118,10 @@ async def upload_document(
         total_chunks=len(chunks),
         total_characters=len(extracted_text),
         session_id=session_id,
-        message="Document uploaded, parsed, chunked, and indexed successfully into vector knowledge base."
+        storage_provider="google_drive",
+        drive_file_id=drive_result.get("drive_file_id"),
+        drive_web_view_link=drive_result.get("drive_web_view_link"),
+        message="File uploaded to Google Drive and indexed successfully into vector knowledge base."
     )
 
 
@@ -148,14 +171,8 @@ async def delete_document(
     """
     Deletes all chunks of a specific document within the active session and removes from Firestore.
     """
-    deleted = vector_store.delete_document(doc_id=doc_id, session_id=session_id)
+    vector_store.delete_document(doc_id=doc_id, session_id=session_id)
     firestore_service.delete_book(doc_id)
-
-    if not deleted:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Document '{doc_id}' not found or already removed in this session."
-        )
 
     return {
         "success": True,

@@ -17,6 +17,14 @@ services:
       - RATE_LIMIT_PER_MINUTE=20
       - LLM_TIMEOUT_SECONDS=15
       - MAX_CONTEXT_TOKENS=8000
+      - FIREBASE_PROJECT_ID=${FIREBASE_PROJECT_ID:-pdf-app-48c12}
+      - FIREBASE_CREDENTIALS_PATH=${FIREBASE_CREDENTIALS_PATH:-./firebase_service_account.json}
+      - FIRESTORE_COLLECTION_BOOKS=${FIRESTORE_COLLECTION_BOOKS:-books}
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY:-}
+      - GOOGLE_DRIVE_FOLDER_NAME=${GOOGLE_DRIVE_FOLDER_NAME:-AI Study Assistant}
+      - GOOGLE_CLIENT_ID=${GOOGLE_CLIENT_ID:-}
+      - GOOGLE_CLIENT_SECRET=${GOOGLE_CLIENT_SECRET:-}
+      - GOOGLE_CLIENT_SECRET_PATH=${GOOGLE_CLIENT_SECRET_PATH:-./google_client_secret.json}
     volumes:
       - chroma_storage:/app/chroma_db
     healthcheck:

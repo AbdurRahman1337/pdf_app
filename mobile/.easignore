@@ -1,0 +1,29 @@
+# dependencies
+node_modules/
+.expo/
+dist/
+web-build/
+
+# native builds
+android/
+ios/
+
+# environment secrets
+.env.local
+.env.*.local
+
+# Keystores & admin service accounts
+*.keystore
+*.jks
+pc-api-key.json
+firebase_service_account*.json
+pdf-app-*.json
+
+# debug & logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS
+.DS_Store
+Thumbs.db

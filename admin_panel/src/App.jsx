@@ -15,6 +15,7 @@ import {
   FileText,
   BrainCircuit,
 } from './components/Icons';
+import appLogo from './assets/main.png';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('chat'); // 'chat' | 'ingest' | 'quizzes'
@@ -223,14 +224,20 @@ export default function App() {
               width: '42px',
               height: '42px',
               borderRadius: '12px',
-              background: 'var(--accent-gradient)',
+              overflow: 'hidden',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'center',
-              boxShadow: '0 4px 16px rgba(99, 102, 241, 0.4)',
+              boxShadow: '0 4px 16px rgba(56, 189, 248, 0.25)',
+              backgroundColor: '#0f172a',
+              border: '1px solid rgba(56, 189, 248, 0.3)',
             }}
           >
-            <BrainCircuit size={24} color="#ffffff" />
+            <img
+              src={appLogo}
+              alt="App Icon"
+              style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+            />
           </div>
           <div>
             <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.02em' }}>AI Study Assistant</h1>

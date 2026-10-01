@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     FIREBASE_CREDENTIALS_PATH: str = "./firebase_service_account.json"
     FIRESTORE_COLLECTION_BOOKS: str = "books"
 
+    # Google Drive & Google Cloud configuration (loaded from .env)
+    GOOGLE_API_KEY: str = ""
+    GOOGLE_DRIVE_FOLDER_NAME: str = "AI Study Assistant"
+    GOOGLE_CLIENT_ID: str = ""
+    GOOGLE_CLIENT_SECRET: str = ""
+    GOOGLE_CLIENT_SECRET_PATH: str = "./google_client_secret.json"
+
     model_config = SettingsConfigDict(
         env_file=".env",
         env_file_encoding="utf-8",

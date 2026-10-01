@@ -27,6 +27,7 @@
     "expo-dev-client": "~6.0.21",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.23",
+    "expo-speech": "^57.0.3",
     "expo-status-bar": "~3.0.9",
     "lucide-react-native": "^1.24.0",
     "react": "19.1.0",

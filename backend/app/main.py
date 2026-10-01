@@ -50,6 +50,11 @@ app.include_router(upload_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(quiz_router, prefix="/api")
 app.include_router(mobile_compat_router, prefix="/api")
+
+app.include_router(health_router, prefix="/api/v1")
+app.include_router(upload_router, prefix="/api/v1")
+app.include_router(chat_router, prefix="/api/v1")
+app.include_router(quiz_router, prefix="/api/v1")
 app.include_router(mobile_compat_router, prefix="/api/v1")
 
 # 5. Static Files and Frontend Single Page App serving

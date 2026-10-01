@@ -37,6 +37,18 @@ if (hasNativeFirebase) {
 
 export const isFirebaseAvailable = Boolean(nativeAuthInstance);
 
+const resolveUserToken = async (fbUser: any, forceRefresh?: boolean): Promise<string> => {
+    if (modularAuth && typeof modularAuth.getIdToken === 'function') {
+        try {
+            return await modularAuth.getIdToken(fbUser, forceRefresh);
+        } catch {}
+    }
+    if (fbUser && typeof fbUser.getIdToken === 'function') {
+        return await fbUser.getIdToken(forceRefresh);
+    }
+    return `token_${fbUser?.uid || 'user'}`;
+};
+
 class LocalAuthManager {
     private currentUser: AuthUser | null = null;
     private listeners: Set<AuthStateListener> = new Set();
@@ -128,7 +140,7 @@ export const authService = {
                     uid: fbUser.uid,
                     email: fbUser.email,
                     displayName: fbUser.displayName,
-                    getIdToken: (forceRefresh) => fbUser.getIdToken(forceRefresh),
+                    getIdToken: (forceRefresh) => resolveUserToken(fbUser, forceRefresh),
                 };
             } catch (e) {
                 return localAuth.getCurrentUser();
@@ -147,7 +159,7 @@ export const authService = {
                             uid: fbUser.uid,
                             email: fbUser.email,
                             displayName: fbUser.displayName,
-                            getIdToken: (forceRefresh) => fbUser.getIdToken(forceRefresh),
+                            getIdToken: (forceRefresh) => resolveUserToken(fbUser, forceRefresh),
                         });
                     }
                 };
@@ -174,7 +186,7 @@ export const authService = {
                 uid: cred.user.uid,
                 email: cred.user.email,
                 displayName: cred.user.displayName,
-                getIdToken: (forceRefresh) => cred.user.getIdToken(forceRefresh),
+                getIdToken: (forceRefresh) => resolveUserToken(cred.user, forceRefresh),
             };
         }
         return localAuth.signInWithEmailAndPassword(email, pass);
@@ -198,7 +210,7 @@ export const authService = {
                 uid: cred.user.uid,
                 email: cred.user.email,
                 displayName: cred.user.displayName,
-                getIdToken: (forceRefresh) => cred.user.getIdToken(forceRefresh),
+                getIdToken: (forceRefresh) => resolveUserToken(cred.user, forceRefresh),
             };
         }
         return localAuth.createUserWithEmailAndPassword(email, pass);

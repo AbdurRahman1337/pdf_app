@@ -96,13 +96,6 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
             const idToken = await currentUser.getIdToken(false);
             config.headers.Authorization = `Bearer ${idToken}`;
             config.headers['X-Session-ID'] = currentUser.uid;
-
-            console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('🔑 [COPY THIS TOKEN FOR SWAGGER UI]');
-            console.log(`Bearer Token : ${idToken}`);
-            console.log(`X-Session-ID : ${currentUser.uid}`);
-            console.log(`User Email   : ${currentUser.email || 'guest@student.edu'}`);
-            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n');
         } catch (e) {
             config.headers['X-Session-ID'] = currentUser.uid;
         }

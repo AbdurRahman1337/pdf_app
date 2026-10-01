@@ -22,12 +22,14 @@ redis_data/
 *.sqlite3
 *.bin
 
-# Firebase & Cloud Credentials — NEVER commit service account keys!
+# Firebase & Cloud Credentials — NEVER commit service account keys or OAuth client secrets!
 firebase_service_account*.json
 pdf-app-*.json
 *-adminsdk-*.json
 serviceAccountKey.json
 service-account*.json
+*client_secret*.json
+google_client_secret*.json
 
 # IDEs
 .vscode/

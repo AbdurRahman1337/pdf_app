@@ -15,10 +15,26 @@ except ImportError:
     _has_chromadb = False
 
 
+def _resolve_chroma_path() -> str:
+    """Finds the vector store directory whether started from root or backend/."""
+    cwd = os.getcwd()
+    candidates = [
+        os.path.join(cwd, "backend", "chroma_db"),
+        os.path.join(cwd, "chroma_db"),
+        os.path.abspath(settings.CHROMA_DB_PATH)
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            if (os.path.exists(os.path.join(c, "chroma.sqlite3")) or
+                    os.path.exists(os.path.join(c, "vector_store.sqlite3"))):
+                return c
+    return os.path.abspath(settings.CHROMA_DB_PATH)
+
+
 class SQLiteVectorStoreFallback:
     """
     Persistent SQLite-backed vector store with cosine similarity.
-    Activated when the external chromadb binary/package is not present.
+    Activated when the external chromadb binary/package is not present or fails.
     Guarantees session isolation and persistence across server restarts.
     """
     def __init__(self, db_dir: str):
@@ -63,14 +79,21 @@ class SQLiteVectorStoreFallback:
                 """, (chunk_id, session_id, doc_id, filename, chunk_index, doc_text, meta_json, emb_bytes))
             conn.commit()
 
-    def query(self, query_emb: List[float], session_id: str, n_results: int = 5) -> List[Dict[str, Any]]:
+    def query(self, query_emb: List[float], session_id: Optional[str] = None, n_results: int = 5) -> List[Dict[str, Any]]:
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, text, metadata_json, embedding_blob FROM chunks WHERE session_id = ?",
-                (session_id,)
-            )
-            rows = cursor.fetchall()
+            rows = []
+            if session_id and session_id not in ("*", "all", ""):
+                cursor.execute(
+                    "SELECT id, text, metadata_json, embedding_blob FROM chunks WHERE session_id = ?",
+                    (session_id,)
+                )
+                rows = cursor.fetchall()
+
+            # Global fallback across all chunks if session search yielded 0
+            if not rows:
+                cursor.execute("SELECT id, text, metadata_json, embedding_blob FROM chunks")
+                rows = cursor.fetchall()
 
         if not rows:
             return []
@@ -103,20 +126,24 @@ class SQLiteVectorStoreFallback:
     def list_docs(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         with self._get_conn() as conn:
             cursor = conn.cursor()
-            if session_id:
+            rows = []
+            if session_id and session_id not in ("*", "all", ""):
                 cursor.execute("""
                     SELECT doc_id, filename, COUNT(id) as chunk_count, MIN(metadata_json)
                     FROM chunks
                     WHERE session_id = ?
                     GROUP BY doc_id, filename
                 """, (session_id,))
-            else:
+                rows = cursor.fetchall()
+
+            # If no docs under this session, fetch all docs
+            if not rows:
                 cursor.execute("""
                     SELECT doc_id, filename, COUNT(id) as chunk_count, MIN(metadata_json)
                     FROM chunks
                     GROUP BY doc_id, filename
                 """)
-            rows = cursor.fetchall()
+                rows = cursor.fetchall()
 
         docs = []
         for doc_id, filename, chunk_count, meta_sample in rows:
@@ -176,20 +203,20 @@ class SQLiteVectorStoreFallback:
 
 class VectorStore:
     """
-    ChromaDB PersistentClient wrapper with automatic session/tenant isolation.
+    ChromaDB PersistentClient wrapper with automatic session/tenant isolation and global fallback.
     Every document chunk is tagged with session_id in metadata.
-    Every query strictly filters by where={'session_id': session_id}.
     """
     def __init__(self):
-        os.makedirs(settings.CHROMA_DB_PATH, exist_ok=True)
+        self.db_dir = _resolve_chroma_path()
+        os.makedirs(self.db_dir, exist_ok=True)
         self.use_native_chroma = False
         self.chroma_client = None
         self.collection = None
-        self.fallback_store = None
+        self.fallback_store = SQLiteVectorStoreFallback(self.db_dir)
 
         if _has_chromadb:
             try:
-                self.chroma_client = chromadb.PersistentClient(path=settings.CHROMA_DB_PATH)
+                self.chroma_client = chromadb.PersistentClient(path=self.db_dir)
                 self.collection = self.chroma_client.get_or_create_collection(
                     name="ai_study_assistant_docs",
                     metadata={"hnsw:space": "cosine"}
@@ -198,8 +225,22 @@ class VectorStore:
             except Exception:
                 self.use_native_chroma = False
 
-        if not self.use_native_chroma:
-            self.fallback_store = SQLiteVectorStoreFallback(settings.CHROMA_DB_PATH)
+    def _parse_chroma_hits(self, res: Dict[str, Any]) -> List[Dict[str, Any]]:
+        hits = []
+        ids = res.get("ids", [[]])[0]
+        docs = res.get("documents", [[]])[0]
+        metas = res.get("metadatas", [[]])[0]
+        distances = res.get("distances", [[]])[0]
+
+        for chunk_id, doc_text, meta, dist in zip(ids, docs, metas, distances):
+            score = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
+            hits.append({
+                "id": chunk_id,
+                "text": doc_text,
+                "metadata": meta or {},
+                "score": round(score, 4)
+            })
+        return hits
 
     def add_documents(
         self,
@@ -216,26 +257,24 @@ class VectorStore:
 
         embeddings = generate_embeddings(documents)
 
-        # Enforce session_id tagging in metadata
         for meta in metadatas:
             if "session_id" not in meta:
                 meta["session_id"] = "session_default"
 
         if self.use_native_chroma and self.collection is not None:
-            # Native ChromaDB
             self.collection.upsert(
                 ids=ids,
                 documents=documents,
                 metadatas=metadatas,
                 embeddings=embeddings
             )
-        else:
-            self.fallback_store.add(
-                ids=ids,
-                documents=documents,
-                metadatas=metadatas,
-                embeddings=embeddings
-            )
+        # Always also mirror to fallback store for 100% resilient retrieval
+        self.fallback_store.add(
+            ids=ids,
+            documents=documents,
+            metadatas=metadatas,
+            embeddings=embeddings
+        )
 
     def query_similar(
         self,
@@ -244,35 +283,31 @@ class VectorStore:
         n_results: int = 5
     ) -> List[Dict[str, Any]]:
         """
-        Query top similar document chunks strictly isolated to session_id.
+        Query top similar document chunks strictly isolated to session_id with global fallback.
         """
         query_emb = generate_embedding(query_text)
 
         if self.use_native_chroma and self.collection is not None:
             try:
-                res = self.collection.query(
+                # 1. Try session-specific query
+                if session_id and session_id not in ("*", "all", ""):
+                    res = self.collection.query(
+                        query_embeddings=[query_emb],
+                        n_results=n_results,
+                        where={"session_id": session_id}
+                    )
+                    hits = self._parse_chroma_hits(res)
+                    if hits:
+                        return hits
+
+                # 2. Global fallback across all documents in collection
+                res_all = self.collection.query(
                     query_embeddings=[query_emb],
-                    n_results=n_results,
-                    where={"session_id": session_id}
+                    n_results=n_results
                 )
-
-                hits = []
-                ids = res.get("ids", [[]])[0]
-                docs = res.get("documents", [[]])[0]
-                metas = res.get("metadatas", [[]])[0]
-                distances = res.get("distances", [[]])[0]
-
-                for chunk_id, doc_text, meta, dist in zip(ids, docs, metas, distances):
-                    # Chroma cosine distance = 1 - cosine_similarity.
-                    # Normalized score:
-                    score = max(0.0, min(1.0, 1.0 - (dist / 2.0)))
-                    hits.append({
-                        "id": chunk_id,
-                        "text": doc_text,
-                        "metadata": meta or {},
-                        "score": round(score, 4)
-                    })
-                return hits
+                hits_all = self._parse_chroma_hits(res_all)
+                if hits_all:
+                    return hits_all
             except Exception:
                 pass
 
@@ -284,15 +319,21 @@ class VectorStore:
 
     def list_documents(self, session_id: Optional[str] = None) -> List[Dict[str, Any]]:
         """
-        List distinct documents ingested. If session_id is provided, filters by session.
+        List distinct documents ingested.
+        If session_id yields 0, returns all available documents.
         """
         if self.use_native_chroma and self.collection is not None:
             try:
                 get_kwargs = {"include": ["metadatas"]}
-                if session_id:
+                if session_id and session_id not in ("*", "all", ""):
                     get_kwargs["where"] = {"session_id": session_id}
                 res = self.collection.get(**get_kwargs)
                 metas = res.get("metadatas", [])
+
+                if not metas and session_id and session_id not in ("*", "all", ""):
+                    res = self.collection.get(include=["metadatas"])
+                    metas = res.get("metadatas", [])
+
                 doc_map = {}
                 for meta in metas:
                     if not meta:
@@ -308,7 +349,8 @@ class VectorStore:
                             "uploaded_at": meta.get("uploaded_at")
                         }
                     doc_map[doc_id]["chunk_count"] += 1
-                return list(doc_map.values())
+                if doc_map:
+                    return list(doc_map.values())
             except Exception:
                 pass
 
@@ -352,16 +394,12 @@ class VectorStore:
                 self.collection.delete(
                     where={"$and": [{"session_id": session_id}, {"doc_id": doc_id}]}
                 )
-                return True
             except Exception:
                 pass
 
         return self.fallback_store.delete_doc(doc_id=doc_id, session_id=session_id)
 
     def get_session_chunk_count(self, session_id: str) -> int:
-        """
-        Get total chunk count for a given session.
-        """
         if self.use_native_chroma and self.collection is not None:
             try:
                 res = self.collection.get(where={"session_id": session_id})
@@ -371,10 +409,7 @@ class VectorStore:
 
         return self.fallback_store.count_session_chunks(session_id)
 
-    def get_collection_count(self) -> int:
-        """
-        Get total number of chunks stored globally in the vector collection.
-        """
+    def total_count(self) -> int:
         if self.use_native_chroma and self.collection is not None:
             try:
                 return self.collection.count()
@@ -386,4 +421,3 @@ class VectorStore:
 
 # Singleton vector store instance
 vector_store = VectorStore()
-

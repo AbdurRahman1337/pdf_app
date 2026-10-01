@@ -108,11 +108,25 @@ async def generate_quiz(
     session_id = payload.session_id or resolved_session_id
 
     # 1. Retrieve relevant topic chunks
-    retrieved_chunks = vector_store.query_similar(
-        query_text=payload.topic,
-        session_id=session_id,
-        n_results=5,
-    )
+    retrieved_chunks = []
+    if payload.pdf_id:
+        doc_chunks = vector_store.get_document_chunks(payload.pdf_id)
+        if doc_chunks:
+            retrieved_chunks = [
+                {
+                    "content": c["text"],
+                    "metadata": c["metadata"],
+                    "score": 1.0
+                }
+                for c in doc_chunks[:8]
+            ]
+
+    if not retrieved_chunks:
+        retrieved_chunks = vector_store.query_similar(
+            query_text=payload.topic,
+            session_id=session_id,
+            n_results=5,
+        )
     context_blocks = format_context_blocks(retrieved_chunks)
 
     # 2. Build quiz prompt

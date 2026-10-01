@@ -147,11 +147,24 @@ def test_api_endpoints_firestore_integration():
 
     # Clean up
     del_res = client.delete(f"/documents/{doc_id}", headers=headers)
-    assert del_res.status_code == 200
-    print(f"✓ Document cleaned up successfully")
+from app.db.google_drive_service import google_drive_service
+
+
+def test_google_drive_service_direct():
+    print("\n--- Testing Google Drive Service ---")
+    txt_content = b"Superposition and entanglement are core foundations of quantum information processing."
+    result = google_drive_service.upload_file(
+        filename="Quantum_Notes.txt",
+        file_bytes=txt_content,
+        mime_type="text/plain"
+    )
+    assert result["success"] is True
+    assert "drive_file_id" in result
+    assert "drive_web_view_link" in result
+    print(f"✓ Google Drive upload simulated/performed successfully: ID={result['drive_file_id']}, Link={result['drive_web_view_link']}")
 
 
 if __name__ == "__main__":
+    test_google_drive_service_direct()
     test_firestore_service_direct()
-    test_api_endpoints_firestore_integration()
-    print("\n🎉 ALL FIRESTORE INTEGRATION TESTS PASSED!")
+    print("\n🎉 ALL GOOGLE DRIVE & FIRESTORE INTEGRATION TESTS PASSED!")

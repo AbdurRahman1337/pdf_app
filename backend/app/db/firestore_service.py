@@ -7,6 +7,11 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional
 import httpx
 
+try:
+    import jwt
+except ImportError:
+    jwt = None
+
 from app.config import settings
 
 logger = logging.getLogger("study_assistant.firestore")
@@ -20,6 +25,19 @@ try:
     from firebase_admin import credentials, firestore
 
     cred_path = settings.FIREBASE_CREDENTIALS_PATH
+    if not cred_path or not os.path.exists(cred_path):
+        # Auto-discover in backend, root, or mobile directory
+        for p in [
+            "./firebase_service_account.json",
+            "./backend/firebase_service_account.json",
+            os.path.join(os.path.dirname(__file__), "..", "..", "firebase_service_account.json"),
+            "/home/mrrobot/Desktop/pdf/pdf_app/mobile/pdf-app-48c12-firebase-adminsdk-fbsvc-f497cb66cf.json",
+            "/home/mrrobot/Desktop/pdf/pdf_app/backend/firebase_service_account.json",
+        ]:
+            if os.path.exists(p):
+                cred_path = p
+                break
+
     if cred_path and os.path.exists(cred_path):
         try:
             cred = credentials.Certificate(cred_path)
@@ -38,9 +56,9 @@ try:
             _sdk_initialized = True
             logger.info(f"Initialized Firebase Admin SDK for project: {settings.FIREBASE_PROJECT_ID}")
         except Exception as e:
-            logger.info(f"Firebase Admin SDK direct auth not available, falling back to REST/Cache: {e}")
+            logger.info(f"Firebase Admin SDK direct auth not available, using authenticated REST client: {e}")
 except Exception as e:
-    logger.info(f"Firebase Admin SDK not loaded ({e}). Running with Firestore REST & resilient store.")
+    logger.info(f"Firebase Admin SDK not loaded ({e}). Running with authenticated Firestore REST & resilient store.")
 
 
 class FirestoreService:
@@ -48,8 +66,8 @@ class FirestoreService:
     Manages persistence of Books and Operation histories in the Firestore 'books' collection.
     Features:
       1. Firebase Admin SDK integration (when service account or ADC credentials exist).
-      2. Firestore REST API fallback (for direct cloud synchronization).
-      3. Local in-memory / session mirror to ensure zero disruption during offline development.
+      2. Authenticated Firestore REST API (using Service Account JWT OAuth2 access token).
+      3. Local in-memory / SQLite mirror to ensure zero disruption during offline development.
     """
 
     def __init__(self):
@@ -58,6 +76,82 @@ class FirestoreService:
         self.rest_base_url = f"https://firestore.googleapis.com/v1/projects/{self.project_id}/databases/(default)/documents"
         # In-memory mirror of books collection
         self._local_books_cache: Dict[str, Dict[str, Any]] = {}
+        # Cached OAuth2 access token
+        self._cached_token: Optional[str] = None
+        self._token_expires_at: float = 0.0
+
+    def _find_service_account_path(self) -> Optional[str]:
+        candidates = [
+            settings.FIREBASE_CREDENTIALS_PATH,
+            "./firebase_service_account.json",
+            "./backend/firebase_service_account.json",
+            os.path.join(os.path.dirname(__file__), "..", "..", "firebase_service_account.json"),
+            "/home/mrrobot/Desktop/pdf/pdf_app/backend/firebase_service_account.json",
+            "/home/mrrobot/Desktop/pdf/pdf_app/mobile/pdf-app-48c12-firebase-adminsdk-fbsvc-f497cb66cf.json",
+        ]
+        for c in candidates:
+            if c and os.path.exists(c):
+                return os.path.abspath(c)
+        return None
+
+    def _get_access_token(self) -> Optional[str]:
+        if self._cached_token and time.time() < self._token_expires_at - 60:
+            return self._cached_token
+
+        if jwt is None:
+            return None
+
+        key_path = self._find_service_account_path()
+        if not key_path:
+            return None
+
+        try:
+            with open(key_path, "r", encoding="utf-8") as f:
+                key_data = json.load(f)
+
+            client_email = key_data.get("client_email")
+            private_key = key_data.get("private_key")
+            if not client_email or not private_key:
+                return None
+
+            now = int(time.time())
+            payload = {
+                "iss": client_email,
+                "sub": client_email,
+                "aud": "https://oauth2.googleapis.com/token",
+                "iat": now,
+                "exp": now + 3600,
+                "scope": "https://www.googleapis.com/auth/datastore https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/drive.file"
+            }
+
+            assertion = jwt.encode(payload, private_key, algorithm="RS256")
+            token_url = key_data.get("token_uri") or "https://oauth2.googleapis.com/token"
+
+            with httpx.Client(timeout=6.0) as client:
+                resp = client.post(
+                    token_url,
+                    data={
+                        "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                        "assertion": assertion,
+                    }
+                )
+                if resp.status_code == 200:
+                    token_info = resp.json()
+                    self._cached_token = token_info.get("access_token")
+                    expires_in = token_info.get("expires_in", 3600)
+                    self._token_expires_at = time.time() + expires_in
+                    logger.info("Successfully refreshed Google Service Account OAuth2 token for Cloud Firestore.")
+                    return self._cached_token
+        except Exception as e:
+            logger.debug(f"Could not refresh service account token: {e}")
+
+        return None
+
+    def _get_auth_headers(self) -> Dict[str, str]:
+        token = self._get_access_token()
+        if token:
+            return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+        return {"Content-Type": "application/json"}
 
     # ── Internal Conversion Helpers for Firestore REST API ────────────────────
 
@@ -123,6 +217,11 @@ class FirestoreService:
             "original_name": book_data.get("original_name") or book_data.get("filename") or "document.pdf",
             "session_id": book_data.get("session_id") or "session_default",
             "user_id": book_data.get("user_id") or book_data.get("session_id") or "session_default",
+            "storage_provider": book_data.get("storage_provider", "google_drive"),
+            "drive_file_id": book_data.get("drive_file_id"),
+            "drive_folder_id": book_data.get("drive_folder_id"),
+            "drive_web_view_link": book_data.get("drive_web_view_link"),
+            "drive_web_content_link": book_data.get("drive_web_content_link"),
             "size_bytes": int(book_data.get("size_bytes", 0)),
             "chunk_count": int(book_data.get("chunk_count") or book_data.get("total_chunks", 0)),
             "total_characters": int(book_data.get("total_characters", 0)),
@@ -162,12 +261,13 @@ class FirestoreService:
             except Exception as e:
                 logger.warning(f"Firebase Admin save failed for {doc_id}: {e}")
 
-        # 2. Try Firestore REST API
+        # 2. Try Authenticated Firestore REST API
         try:
             url = f"{self.rest_base_url}/{self.collection_name}/{doc_id}"
             fields_payload = {"fields": {k: self._to_firestore_value(v) for k, v in record.items() if v is not None}}
+            headers = self._get_auth_headers()
             with httpx.Client(timeout=5.0) as client:
-                resp = client.patch(url, json=fields_payload)
+                resp = client.patch(url, json=fields_payload, headers=headers)
                 if resp.status_code in (200, 201):
                     logger.debug(f"Saved book {doc_id} to Firestore REST")
                     return True
@@ -192,11 +292,12 @@ class FirestoreService:
             except Exception as e:
                 logger.warning(f"Firebase Admin get_book failed: {e}")
 
-        # 2. Try Firestore REST API
+        # 2. Try Authenticated Firestore REST API
         try:
             url = f"{self.rest_base_url}/{self.collection_name}/{doc_id}"
+            headers = self._get_auth_headers()
             with httpx.Client(timeout=4.0) as client:
-                resp = client.get(url)
+                resp = client.get(url, headers=headers)
                 if resp.status_code == 200:
                     data = self._document_to_dict(resp.json())
                     self._local_books_cache[doc_id] = data
@@ -232,11 +333,12 @@ class FirestoreService:
             except Exception as e:
                 logger.warning(f"Firebase Admin list_books failed: {e}")
 
-        # 2. Try Firestore REST API
+        # 2. Try Authenticated Firestore REST API
         try:
             url = f"{self.rest_base_url}/{self.collection_name}"
+            headers = self._get_auth_headers()
             with httpx.Client(timeout=4.0) as client:
-                resp = client.get(url)
+                resp = client.get(url, headers=headers)
                 if resp.status_code == 200:
                     documents = resp.json().get("documents", [])
                     for d in documents:
@@ -294,7 +396,7 @@ class FirestoreService:
             except Exception as e:
                 logger.warning(f"Firebase Admin update_summary failed for {doc_id}: {e}")
 
-        # 2. Try Firestore REST API
+        # 2. Try Authenticated Firestore REST API
         try:
             url = f"{self.rest_base_url}/{self.collection_name}/{doc_id}?updateMask.fieldPaths=summary&updateMask.fieldPaths=vocabulary&updateMask.fieldPaths=updated_at"
             payload = {
@@ -304,8 +406,9 @@ class FirestoreService:
                     "updated_at": self._to_firestore_value(now_iso),
                 }
             }
+            headers = self._get_auth_headers()
             with httpx.Client(timeout=4.0) as client:
-                client.patch(url, json=payload)
+                client.patch(url, json=payload, headers=headers)
                 return True
         except Exception:
             pass
@@ -365,7 +468,7 @@ class FirestoreService:
             except Exception as e:
                 logger.warning(f"Firebase Admin record_operation failed for {doc_id}: {e}")
 
-        # 2. Try Firestore REST API
+        # 2. Try Authenticated Firestore REST API
         if book:
             try:
                 url = f"{self.rest_base_url}/{self.collection_name}/{doc_id}?updateMask.fieldPaths=operations&updateMask.fieldPaths=stats&updateMask.fieldPaths=updated_at"
@@ -376,8 +479,9 @@ class FirestoreService:
                         "updated_at": self._to_firestore_value(now_iso),
                     }
                 }
+                headers = self._get_auth_headers()
                 with httpx.Client(timeout=4.0) as client:
-                    client.patch(url, json=payload)
+                    client.patch(url, json=payload, headers=headers)
                     return True
             except Exception:
                 pass
@@ -399,8 +503,9 @@ class FirestoreService:
 
         try:
             url = f"{self.rest_base_url}/{self.collection_name}/{doc_id}"
+            headers = self._get_auth_headers()
             with httpx.Client(timeout=4.0) as client:
-                client.delete(url)
+                client.delete(url, headers=headers)
                 return True
         except Exception:
             pass
@@ -410,4 +515,3 @@ class FirestoreService:
 
 # Singleton instance for the application
 firestore_service = FirestoreService()
-
