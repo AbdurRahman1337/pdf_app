@@ -483,20 +483,6 @@ async def get_mobile_pdf_details(pdf_id: str):
                     MobileVocabItem(term="RAG", definition="Retrieval-Augmented Generation connecting LLMs with reference material.")
                 ]
             )
-        except Exception:
-            return MobilePDFDetailResponse(
-                id=pdf_id,
-                original_name=filename,
-                process_status="COMPLETED",
-                summary_brief=f"Key materials extracted from {filename}.",
-                summary_details=MobileSummaryDetails(
-                    main_points="• Core themes indexed in vector store.\n• Ready for interactive RAG querying."
-                ),
-                vocabulary=[
-                    MobileVocabItem(term="Knowledge Base", definition="A vector-indexed repository of document facts and concepts."),
-                    MobileVocabItem(term="RAG", definition="Retrieval-Augmented Generation connecting LLMs with reference material.")
-                ]
-            )
 
 
 # ── AI Endpoints ──────────────────────────────────────────────────────────────
@@ -610,7 +596,7 @@ async def socratic_tutor_mode(
         query_text = payload.concept_or_topic or "essential concepts"
         retrieved = vector_store.query_similar(query_text, session_id=session_id, n_results=4)
         if retrieved:
-            doc_context = "\n\n".join([r["content"] for r in retrieved])[:8000]
+            doc_context = "\n\n".join([r.get("text") or r.get("content", "") for r in retrieved])[:8000]
 
     if not payload.student_explanation or len(payload.student_explanation.strip()) < 5:
         # Generate initial challenge question

@@ -26,9 +26,7 @@ class UnifiedLLMClient:
         self.timeout = settings.LLM_TIMEOUT_SECONDS
 
     def _get_gemini_model(self) -> str:
-        model = self.model_name.replace("models/", "") if "gemini" in self.model_name else "gemini-1.5-flash"
-        if model in ("gemini-2.5-flash", "gemini-flash"):
-            model = "gemini-1.5-flash"
+        model = self.model_name.replace("models/", "") if "gemini" in self.model_name else "gemini-2.5-flash"
         return model
 
     async def _call_gemini_api(self, prompt_text: str, temperature: float) -> str:
@@ -207,6 +205,64 @@ class UnifiedLLMClient:
             "vocabulary": vocab_items
         })
 
+    def _extract_all_difficult_vocabulary(
+        self,
+        summary_text: str = "",
+        main_points_text: str = "",
+        excerpt_text: str = "",
+        clean_fn: str = "Document"
+    ) -> List[Dict[str, str]]:
+        """
+        Extracts challenging technical, academic, and conceptual terms with definitions
+        from generated summaries, key points, and document excerpts.
+        """
+        combined = f"{summary_text}\n{main_points_text}\n{excerpt_text}"
+        raw_lines = [l.strip() for l in combined.splitlines() if len(l.strip()) > 5]
+
+        vocab_items = []
+        seen_terms = set()
+
+        for line in raw_lines:
+            if ":" in line and not line.startswith("http"):
+                parts = line.split(":", 1)
+                t = parts[0].strip("•-* \t#")
+                d = parts[1].strip()
+                if 2 < len(t) < 35 and len(d) > 10 and not any(ch in t for ch in "()[]{}\n"):
+                    if t.lower() not in seen_terms:
+                        seen_terms.add(t.lower())
+                        vocab_items.append({"term": t, "definition": d if d.endswith(".") else d + "."})
+
+            m = re.match(r"^([A-Z][a-zA-Z\s]{2,30})\s*\(([A-Z0-9]{2,8})\)\s*(?:is|provides|enables|refers to)?\s*(.*)", line)
+            if m:
+                t = m.group(2)
+                desc = m.group(3).strip()
+                full_desc = f"{m.group(1).strip()}: {desc}" if desc else f"Standard industry acronym for {m.group(1).strip()}."
+                if t.lower() not in seen_terms:
+                    seen_terms.add(t.lower())
+                    vocab_items.append({"term": t, "definition": full_desc if full_desc.endswith(".") else full_desc + "."})
+
+            if len(vocab_items) >= 20:
+                break
+
+        if len(vocab_items) < 10:
+            keywords = re.findall(r"\b[A-Z][a-zA-Z0-9_-]{3,}\b", combined)
+            stopwords = {
+                "Chapter", "Section", "Table", "Figure", "Pearson", "Copyright", "Edition",
+                "Rights", "Reserved", "Page", "Preface", "Index", "Summary", "Topic",
+                "Document", "Overview", "Details", "Introduction", "Conclusion", "Example"
+            }
+            for kw in keywords:
+                if kw not in stopwords and kw.lower() not in seen_terms:
+                    seen_terms.add(kw.lower())
+                    vocab_items.append({
+                        "term": kw,
+                        "definition": f"Core conceptual framework and operational mechanism detailed in the {clean_fn} study materials."
+                    })
+                if len(vocab_items) >= 20:
+                    break
+
+        return vocab_items
+
     def _generate_offline_tutor_response(self, prompt_text: str) -> str:
         """
         Academic tutor offline generator used when API keys are not provided or cloud API fails.
@@ -274,7 +330,47 @@ class UnifiedLLMClient:
             }
             return es_map.get(raw, f"{raw} (traducción contextual)")
 
-        # D. Regular Tutor Chat Response
+        # D. Regular Tutor Chat Response with smart excerpt grounding
+        user_match = re.search(r"\[USER\]\s*([\s\S]*)", prompt_text, re.IGNORECASE)
+        user_query = user_match.group(1).strip() if user_match else ""
+        
+        # Extract materials block
+        mat_match = re.search(r"=== RELEVANT COURSE MATERIALS ===([\s\S]*?)=================================", prompt_text)
+        mat_text = mat_match.group(1).strip() if mat_match else ""
+
+        # Extract meaningful lines/sentences from context
+        meaningful_sentences = []
+        if mat_text:
+            lines = [l.strip() for l in mat_text.splitlines() if len(l.strip()) > 20 and not l.startswith("--- [")]
+            for l in lines:
+                sentences = re.split(r"(?<=[.!?])\s+", l)
+                for s in sentences:
+                    if len(s.strip()) > 25:
+                        meaningful_sentences.append(s.strip())
+
+        # If user query words match sentences, score and pick top relevant sentences
+        query_words = set(re.findall(r"\b[a-zA-Z0-9]{3,}\b", user_query.lower()))
+        matched_sentences = []
+        for s in meaningful_sentences:
+            s_words = set(re.findall(r"\b[a-zA-Z0-9]{3,}\b", s.lower()))
+            overlap = len(query_words.intersection(s_words))
+            if overlap > 0:
+                matched_sentences.append((overlap, s))
+
+        matched_sentences.sort(key=lambda x: x[0], reverse=True)
+        top_excerpts = [s for _, s in matched_sentences[:3]]
+
+        if top_excerpts:
+            explanation = " ".join(top_excerpts)
+            return (
+                f"### Academic Tutor Response\n\n"
+                f"Based on your uploaded course notes:\n\n"
+                f"{explanation}\n\n"
+                f"**Key Takeaways:**\n"
+                f"• Review the highlighted terms and definitions in your document for full context.\n"
+                f"• You can generate a custom quiz or study cheat-sheet to test your active recall on this topic!"
+            )
+
         return (
             f"### Academic Tutor Response\n\n"
             f"Based on your uploaded course materials, here is a structured breakdown:\n\n"

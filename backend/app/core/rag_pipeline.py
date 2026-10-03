@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from app.db.models import ChatMessage, ChatResponse, DocumentSource
 from app.db.vector_store import vector_store
 from app.core.prompt_builder import (

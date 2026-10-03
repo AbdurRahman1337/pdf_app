@@ -1,5 +1,5 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, HTMLResponse
@@ -73,7 +73,7 @@ if os.path.exists(static_dir):
     async def catch_all_spa(full_path: str):
         # Don't intercept api, docs, or schema routes
         if full_path.startswith(("api/", "docs", "redoc", "openapi.json", "health", "upload", "documents", "chat", "quiz", "pdf", "ai")):
-            return None
+            raise HTTPException(status_code=404, detail="Not Found")
         file_candidate = os.path.join(static_dir, full_path)
         if os.path.exists(file_candidate) and os.path.isfile(file_candidate):
             return FileResponse(file_candidate)

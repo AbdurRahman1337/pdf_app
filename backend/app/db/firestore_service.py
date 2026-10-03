@@ -319,7 +319,11 @@ class FirestoreService:
             try:
                 col_ref = _admin_db.collection(self.collection_name)
                 if session_id and session_id not in ("session_default", "*", "all"):
-                    docs = col_ref.where("session_id", "==", session_id).stream()
+                    try:
+                        from google.cloud.firestore import FieldFilter
+                        docs = col_ref.where(filter=FieldFilter("session_id", "==", session_id)).stream()
+                    except Exception:
+                        docs = col_ref.where("session_id", "==", session_id).stream()
                 else:
                     docs = col_ref.stream()
 

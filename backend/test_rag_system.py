@@ -18,6 +18,42 @@ def test_health():
     print(f"  [PASS] /health returned status={data['status']}, collection_count={data['collection_count']}")
 
 
+import pytest
+
+
+def _create_test_doc():
+    sample_text = """
+    # Principles of Operating Systems: Concurrency and Synchronization
+
+    Concurrency refers to the ability of different parts or units of a program, algorithm, or problem
+    to be executed out-of-order or in partial order, without affecting the outcome.
+    
+    A race condition occurs when two or more threads or processes access shared data and try to change it
+    at the same time. Because the thread scheduling algorithm can swap between threads at any time,
+    you don't know the order in which the threads will attempt to access the shared data.
+
+    A mutex (mutual exclusion object) is a synchronization primitive that grants exclusive access
+    to the shared resource to only one thread at a time.
+    Semaphores are integer variables used to control access to common resources by multiple processes.
+    """
+    import uuid
+    session_id = f"test_session_user_{uuid.uuid4().hex[:8]}"
+    files = {"file": ("os_notes.txt", sample_text.encode("utf-8"), "text/plain")}
+    data = {"session_id": session_id}
+
+    resp = client.post("/upload", files=files, data=data, headers={"X-Session-ID": session_id})
+    assert resp.status_code == 200, f"Upload text failed: {resp.text}"
+    upload_res = resp.json()
+    assert upload_res["total_chunks"] >= 1
+    doc_id = upload_res["doc_id"]
+    return {"doc_id": doc_id, "session_id": session_id}
+
+
+@pytest.fixture
+def uploaded_doc():
+    return _create_test_doc()
+
+
 def test_upload_text_and_pdf():
     print("Testing POST /upload with plain text notes...")
     sample_text = """
@@ -56,10 +92,9 @@ def test_upload_text_and_pdf():
     assert any(d["doc_id"] == doc_id for d in docs["documents"])
     print(f"  [PASS] Found {docs['total_documents']} documents in session with {docs['total_chunks']} chunks.")
 
-    return doc_id, session_id
 
-
-def test_chat_interaction(session_id: str):
+def test_chat_interaction(uploaded_doc):
+    session_id = uploaded_doc["session_id"] if isinstance(uploaded_doc, dict) else uploaded_doc
     print("Testing POST /chat RAG pipeline...")
     payload = {
         "message": "What is a race condition and how does a mutex help solve it?",
@@ -76,7 +111,8 @@ def test_chat_interaction(session_id: str):
         print(f"    - Source: {s['filename']} (Score: {s['score']})")
 
 
-def test_quiz_generation(session_id: str):
+def test_quiz_generation(uploaded_doc):
+    session_id = uploaded_doc["session_id"] if isinstance(uploaded_doc, dict) else uploaded_doc
     print("Testing POST /quiz/generate...")
     payload = {
         "topic": "Concurrency and Mutex Synchronization",
@@ -94,7 +130,12 @@ def test_quiz_generation(session_id: str):
     print(f"  [PASS] Generated {len(quiz_data['questions'])} validated quiz questions for topic '{quiz_data['topic']}'.")
 
 
-def test_delete_document(doc_id: str, session_id: str):
+def test_delete_document(uploaded_doc):
+    if isinstance(uploaded_doc, dict):
+        doc_id = uploaded_doc["doc_id"]
+        session_id = uploaded_doc["session_id"]
+    else:
+        doc_id, session_id = uploaded_doc
     print(f"Testing DELETE /documents/{doc_id}...")
     resp = client.delete(f"/documents/{doc_id}", headers={"X-Session-ID": session_id})
     assert resp.status_code == 200
@@ -167,10 +208,11 @@ if __name__ == "__main__":
     print("Running Comprehensive AI Study Assistant Verification")
     print("==================================================")
     test_health()
-    doc_id, session_id = test_upload_text_and_pdf()
-    test_chat_interaction(session_id)
-    test_quiz_generation(session_id)
-    test_delete_document(doc_id, session_id)
+    test_upload_text_and_pdf()
+    doc_info = _create_test_doc()
+    test_chat_interaction(doc_info)
+    test_quiz_generation(doc_info)
+    test_delete_document(doc_info)
     test_rate_limiter_and_error_handling()
     test_mobile_compat_endpoints()
     print("==================================================")

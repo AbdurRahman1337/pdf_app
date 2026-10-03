@@ -114,6 +114,7 @@ async def generate_quiz(
         if doc_chunks:
             retrieved_chunks = [
                 {
+                    "text": c["text"],
                     "content": c["text"],
                     "metadata": c["metadata"],
                     "score": 1.0

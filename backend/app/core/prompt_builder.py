@@ -24,7 +24,7 @@ def format_context_blocks(retrieved_chunks: List[Dict[str, Any]]) -> str:
         meta = item.get("metadata", {})
         filename = meta.get("filename", "Unknown Document")
         chunk_idx = meta.get("chunk_index", 0)
-        content = item.get("text", "").strip()
+        content = (item.get("text") or item.get("content") or "").strip()
 
         header = f"--- [SOURCE DOCUMENT #{idx}: {filename} (Section {chunk_idx})] ---"
         blocks.append(f"{header}\n{content}")

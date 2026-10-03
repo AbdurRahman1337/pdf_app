@@ -200,6 +200,9 @@ class SQLiteVectorStoreFallback:
             row = cursor.fetchone()
             return row[0] if row else 0
 
+    def get_collection_count(self) -> int:
+        return self.total_count()
+
 
 class VectorStore:
     """
@@ -417,6 +420,10 @@ class VectorStore:
                 pass
 
         return self.fallback_store.total_count()
+
+    def get_collection_count(self) -> int:
+        """Alias for total_count for health check and backward compatibility."""
+        return self.total_count()
 
 
 # Singleton vector store instance

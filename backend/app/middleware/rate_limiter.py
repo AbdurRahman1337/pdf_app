@@ -18,10 +18,19 @@ class SlidingWindowRateLimiter(BaseHTTPMiddleware):
         self.rate_limit = settings.RATE_LIMIT_PER_MINUTE
         self.window_seconds = 60.0
         self.ip_records: Dict[str, List[float]] = defaultdict(list)
-        self.exempt_prefixes = ("/health", "/docs", "/openapi.json", "/redoc", "/static", "/favicon.ico")
+        self.exempt_prefixes = (
+            "/health",
+            "/api/health",
+            "/api/v1/health",
+            "/docs",
+            "/openapi.json",
+            "/redoc",
+            "/static",
+            "/favicon.ico",
+        )
 
     def _is_exempt(self, path: str) -> bool:
-        if path == "/" or path.startswith(self.exempt_prefixes):
+        if path == "/" or path.startswith(self.exempt_prefixes) or path.endswith("/health"):
             return True
         return False
 
@@ -31,10 +40,13 @@ class SlidingWindowRateLimiter(BaseHTTPMiddleware):
         if self._is_exempt(path):
             return await call_next(request)
 
-        # Determine client IP
+        # Determine client key (X-Forwarded-For, X-Session-ID, or client IP)
         forwarded = request.headers.get("x-forwarded-for")
+        session_hdr = request.headers.get("x-session-id")
         if forwarded:
             client_ip = forwarded.split(",")[0].strip()
+        elif session_hdr:
+            client_ip = f"session_{session_hdr.strip()}"
         elif request.client:
             client_ip = request.client.host
         else:
