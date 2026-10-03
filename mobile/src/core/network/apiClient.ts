@@ -7,11 +7,15 @@
  * over Wi-Fi and emulators can reach the backend.
  */
 import axios, { InternalAxiosRequestConfig } from 'axios';
-import { NativeModules, Platform } from 'react-native';
+import { NativeModules } from 'react-native';
 import Constants from 'expo-constants';
 import authService from '../auth/authService';
 
+export const BACKEND_LAN_URL = 'http://192.168.0.115:8000/api/v1';
+export const BACKEND_USB_URL = 'http://localhost:8000/api/v1';
+
 let customBaseUrl: string | null = null;
+let probePromise: Promise<string> | null = null;
 
 export const setApiBaseUrl = (url: string) => {
     customBaseUrl = url;
@@ -22,7 +26,7 @@ const extractHostFromUri = (uri?: string | null): string | null => {
     try {
         const withoutProto = uri.replace(/^[a-zA-Z]+:\/\//, '');
         const host = withoutProto.split('/')[0].split(':')[0];
-        if (host && host !== 'localhost' && host !== '127.0.0.1') {
+        if (host) {
             return host;
         }
     } catch {
@@ -32,23 +36,22 @@ const extractHostFromUri = (uri?: string | null): string | null => {
 };
 
 export const getBaseUrl = (): string => {
-    // 0. Manual runtime override if set
+    // 0. Manual or probed runtime override if set
     if (customBaseUrl) {
         return customBaseUrl;
     }
 
-    // 1. Explicit environment variable (set via EXPO_PUBLIC_API_URL in .env or eas.json)
-    if (process.env.EXPO_PUBLIC_API_URL) {
-        return process.env.EXPO_PUBLIC_API_URL;
-    }
-
-    // 2. Official Expo Constants host detection (works in Dev Client & Expo Go)
+    // 1. Check how Metro loaded the bundle (if loaded via localhost/adb reverse, use localhost:8000)
     try {
         const expoHost =
             extractHostFromUri(Constants.expoConfig?.hostUri) ||
             extractHostFromUri((Constants as any).manifest2?.extra?.expoGo?.debuggerHost) ||
-            extractHostFromUri((Constants as any).manifest?.debuggerHost);
+            extractHostFromUri((Constants as any).manifest?.debuggerHost) ||
+            extractHostFromUri(NativeModules.SourceCode?.scriptURL);
 
+        if (expoHost === 'localhost' || expoHost === '127.0.0.1') {
+            return BACKEND_USB_URL;
+        }
         if (expoHost) {
             return `http://${expoHost}:8000/api/v1`;
         }
@@ -56,24 +59,49 @@ export const getBaseUrl = (): string => {
         // Fall through
     }
 
-    // 3. React Native Metro SourceCode.scriptURL host detection
-    try {
-        const scriptURL = NativeModules.SourceCode?.scriptURL;
-        const scriptHost = extractHostFromUri(scriptURL);
-        if (scriptHost) {
-            return `http://${scriptHost}:8000/api/v1`;
+    // 2. Explicit environment variable (set via EXPO_PUBLIC_API_URL in .env)
+    if (process.env.EXPO_PUBLIC_API_URL) {
+        return process.env.EXPO_PUBLIC_API_URL;
+    }
+
+    // 3. Configured LAN Backend IP (192.168.0.115)
+    return BACKEND_LAN_URL;
+};
+
+/**
+ * Probes both LAN (192.168.0.115:8000) and USB (localhost:8000) and selects whichever responds first.
+ */
+const resolveReachableBaseUrl = async (): Promise<string> => {
+    if (customBaseUrl) return customBaseUrl;
+    if (probePromise) return probePromise;
+
+    const candidates = [BACKEND_LAN_URL, BACKEND_USB_URL, 'http://10.0.2.2:8000/api/v1'];
+
+    probePromise = (async () => {
+        const checkCandidate = async (base: string): Promise<string> => {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 1500);
+            try {
+                const res = await fetch(`${base}/health`, { signal: controller.signal });
+                if (res.ok) return base;
+                throw new Error('Not ok');
+            } finally {
+                clearTimeout(timer);
+            }
+        };
+
+        try {
+            const winner = await Promise.any(candidates.map(checkCandidate));
+            customBaseUrl = winner;
+            return winner;
+        } catch {
+            return getBaseUrl();
+        } finally {
+            probePromise = null;
         }
-    } catch {
-        // Fall through
-    }
+    })();
 
-    // 4. Android Emulator loopback alias for host machine
-    if (Platform.OS === 'android') {
-        return 'http://10.0.2.2:8000/api/v1';
-    }
-
-    // 5. iOS Simulator / Web / Local fallback
-    return 'http://localhost:8000/api/v1';
+    return probePromise;
 };
 
 const apiClient = axios.create({
@@ -82,13 +110,8 @@ const apiClient = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
-    // Ensure base URL is dynamically evaluated if it was initially defaulted
-    if (!config.baseURL || config.baseURL.includes('10.0.2.2') || config.baseURL.includes('localhost')) {
-        const resolved = getBaseUrl();
-        if (resolved) {
-            config.baseURL = resolved;
-        }
-    }
+    const reachableUrl = await resolveReachableBaseUrl();
+    config.baseURL = reachableUrl;
 
     const currentUser = authService.getCurrentUser();
     if (currentUser) {
@@ -107,15 +130,19 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
 
 apiClient.interceptors.response.use(
     (response) => response,
-    (error) => {
-        if (error.message === 'Network Error' || error.code === 'ERR_NETWORK') {
-            console.warn(
-                `[API Network Error] Unable to reach backend at: ${error.config?.baseURL || ''}. ` +
-                `Ensure your FastAPI backend is running and listening on 0.0.0.0:8000 ` +
-                `(run: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload). ` +
-                `If using a physical device, ensure both device and computer are on the same Wi-Fi network ` +
-                `or set EXPO_PUBLIC_API_URL in mobile/.env`
-            );
+    async (error) => {
+        const config = error.config as (InternalAxiosRequestConfig & { _retriedFallback?: boolean }) | undefined;
+        if (
+            config &&
+            !config._retriedFallback &&
+            (error.message === 'Network Error' || error.code === 'ERR_NETWORK' || error.code === 'ECONNABORTED')
+        ) {
+            config._retriedFallback = true;
+            const currentBase = config.baseURL || '';
+            const alternateUrl = currentBase.includes('192.168.0.115') ? BACKEND_USB_URL : BACKEND_LAN_URL;
+            customBaseUrl = alternateUrl;
+            config.baseURL = alternateUrl;
+            return apiClient.request(config);
         }
         return Promise.reject(error);
     }
