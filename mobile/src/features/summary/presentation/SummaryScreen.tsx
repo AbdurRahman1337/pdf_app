@@ -26,6 +26,7 @@ import {
     AlertTriangle,
     Zap,
     Users,
+    Layers,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import ttsService from '../../../core/tts/ttsService';
@@ -188,28 +189,23 @@ const SummaryScreen = ({ route, navigation }: any) => {
         <View style={styles.container}>
             {/* ── Top Header ── */}
             <View style={styles.headerRow}>
-                {navigation?.canGoBack?.() ? (
-                    <TouchableOpacity
-                        onPress={() => {
-                            ttsService.stop();
-                            navigation.goBack();
-                        }}
-                        style={styles.backBtn}
-                        activeOpacity={0.7}
-                    >
-                        <ChevronLeft size={22} color={colors.text} />
-                    </TouchableOpacity>
-                ) : (
-                    <View style={styles.headerIconBg}>
-                        <Headphones size={20} color={colors.accent} />
-                    </View>
-                )}
+                <TouchableOpacity
+                    onPress={() => {
+                        ttsService.stop();
+                        navigation?.goBack?.();
+                    }}
+                    style={styles.backBtn}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Go Back"
+                >
+                    <ChevronLeft size={22} color={colors.text} />
+                </TouchableOpacity>
 
                 <View style={styles.titleContainer}>
                     <Text style={styles.headerTitle} numberOfLines={1}>
-                        {docTitle || 'Audio & Synthesis'}
+                        {docTitle || 'Document Summary'}
                     </Text>
-                    <Text style={styles.headerSub}>Audio Narration &amp; 1-Page Cheat Sheet</Text>
+                    <Text style={styles.headerSub}>Executive Summary &amp; Study Sheet</Text>
                 </View>
 
                 <View style={styles.headerActionGroup}>

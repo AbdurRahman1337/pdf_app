@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef, useEffect } from 'react';
 import {
     View,
     Text,
@@ -9,6 +9,7 @@ import {
     StyleSheet,
     Image,
     KeyboardAvoidingView,
+    Keyboard,
     Platform,
 } from 'react-native';
 import { Mail, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, Zap } from 'lucide-react-native';
@@ -48,6 +49,30 @@ const AuthScreen = ({ navigation }: any) => {
     const [showPassword, setShowPassword] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
+    const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+    const scrollRef = useRef<ScrollView>(null);
+
+    useEffect(() => {
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            () => {
+                setIsKeyboardVisible(true);
+                setTimeout(() => {
+                    scrollRef.current?.scrollTo({ y: 150, animated: true });
+                }, 100);
+            }
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => {
+                setIsKeyboardVisible(false);
+            }
+        );
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
 
     const handleAuth = async () => {
         setError('');
@@ -98,25 +123,50 @@ const AuthScreen = ({ navigation }: any) => {
     return (
         <KeyboardAvoidingView
             style={styles.container}
-            behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+            behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
         >
             <ScrollView
-                contentContainerStyle={styles.scrollContainer}
+                ref={scrollRef}
+                contentContainerStyle={[
+                    styles.scrollContainer,
+                    isKeyboardVisible && {
+                        justifyContent: 'flex-start',
+                        paddingTop: spacing.lg,
+                        paddingBottom: 60,
+                    },
+                ]}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode="on-drag"
             >
                 {/* ── Brand Header ── */}
-                <View style={styles.brandContainer}>
-                    <View style={styles.logoBadge}>
+                <View
+                    style={[
+                        styles.brandContainer,
+                        isKeyboardVisible && { marginBottom: spacing.sm },
+                    ]}
+                >
+                    <View
+                        style={[
+                            styles.logoBadge,
+                            isKeyboardVisible && { width: 56, height: 56, marginBottom: spacing.xs },
+                        ]}
+                    >
                         <Image
                             source={require('../../../../assets/main.png')}
-                            style={styles.logoImage}
+                            style={[
+                                styles.logoImage,
+                                isKeyboardVisible && { width: 40, height: 40 },
+                            ]}
                         />
                     </View>
                     <Text style={styles.brandTitle}>PDF AI Study Hub</Text>
-                    <Text style={styles.brandSubtitle}>
-                        Synthesize documents, extract key vocabulary, and query notes with RAG.
-                    </Text>
+                    {!isKeyboardVisible && (
+                        <Text style={styles.brandSubtitle}>
+                            Synthesize documents, extract key vocabulary, and query notes with RAG.
+                        </Text>
+                    )}
 
                     <View style={authService.isFirebaseAvailable ? styles.authStatusBadgeFirebase : styles.authStatusBadgeExpo}>
                         <ShieldCheck
@@ -173,6 +223,7 @@ const AuthScreen = ({ navigation }: any) => {
                                 placeholderTextColor={colors.textSubtle}
                                 value={email}
                                 onChangeText={setEmail}
+                                onFocus={() => scrollRef.current?.scrollTo({ y: 120, animated: true })}
                                 autoCapitalize="none"
                                 keyboardType="email-address"
                                 autoCorrect={false}
@@ -190,6 +241,7 @@ const AuthScreen = ({ navigation }: any) => {
                                 placeholderTextColor={colors.textSubtle}
                                 value={password}
                                 onChangeText={setPassword}
+                                onFocus={() => scrollRef.current?.scrollTo({ y: 170, animated: true })}
                                 secureTextEntry={!showPassword}
                             />
                             <TouchableOpacity
@@ -217,6 +269,7 @@ const AuthScreen = ({ navigation }: any) => {
                                     placeholderTextColor={colors.textSubtle}
                                     value={confirmPassword}
                                     onChangeText={setConfirmPassword}
+                                    onFocus={() => scrollRef.current?.scrollTo({ y: 220, animated: true })}
                                     secureTextEntry={!showPassword}
                                 />
                             </View>

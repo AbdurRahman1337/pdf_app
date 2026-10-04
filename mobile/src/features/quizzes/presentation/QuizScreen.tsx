@@ -209,19 +209,14 @@ const QuizScreen = ({ route, navigation }: any) => {
         <View style={styles.container}>
             {/* ── Top Header ── */}
             <View style={styles.headerRow}>
-                {navigation?.canGoBack?.() ? (
-                    <TouchableOpacity
-                        onPress={() => navigation.goBack()}
-                        style={styles.backBtn}
-                        activeOpacity={0.7}
-                    >
-                        <ChevronLeft size={22} color={colors.text} />
-                    </TouchableOpacity>
-                ) : (
-                    <View style={styles.headerIconBg}>
-                        <GraduationCap size={20} color={colors.accent} />
-                    </View>
-                )}
+                <TouchableOpacity
+                    onPress={() => navigation?.goBack?.()}
+                    style={styles.backBtn}
+                    activeOpacity={0.7}
+                    accessibilityLabel="Go Back"
+                >
+                    <ChevronLeft size={22} color={colors.text} />
+                </TouchableOpacity>
 
                 <View style={styles.titleContainer}>
                     <Text style={styles.headerTitle}>AI Exam &amp; Quiz Arena</Text>

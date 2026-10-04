@@ -11,6 +11,8 @@ import {
     Alert,
     ScrollView,
     Easing,
+    Keyboard,
+    Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -84,6 +86,23 @@ export const FloatingSettings: React.FC = () => {
             setCurrentUser(u);
         });
         return unsubscribe;
+    }, []);
+
+    // Listen to keyboard state
+    const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+    useEffect(() => {
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            () => setIsKeyboardVisible(true)
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => setIsKeyboardVisible(false)
+        );
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
     }, []);
 
     // Load saved position
@@ -220,58 +239,60 @@ export const FloatingSettings: React.FC = () => {
     return (
         <>
             {/* Movable Floating Icon */}
-            <View style={styles.floatingLayer} pointerEvents="box-none">
-                <Animated.View
-                    style={[
-                        styles.floatingButtonContainer,
-                        {
-                            transform: [
-                                { translateX: pan.x },
-                                { translateY: pan.y },
-                                { scale: scaleAnim },
-                            ],
-                        },
-                    ]}
-                    {...panResponder.panHandlers}
-                >
-                    <View
+            {!isKeyboardVisible && (
+                <View style={styles.floatingLayer} pointerEvents="box-none">
+                    <Animated.View
                         style={[
-                            styles.floatingButton,
+                            styles.floatingButtonContainer,
                             {
-                                backgroundColor: colors.floatingBg,
-                                borderColor: colors.floatingBorder,
-                                shadowColor: colors.floatingShadow,
+                                transform: [
+                                    { translateX: pan.x },
+                                    { translateY: pan.y },
+                                    { scale: scaleAnim },
+                                ],
                             },
                         ]}
+                        {...panResponder.panHandlers}
                     >
-                        {/* Glow indicator with circulating slow-motion Settings gear */}
-                        <View style={[styles.innerGlow, { backgroundColor: colors.accentMuted }]}>
-                            <Animated.View style={{ transform: [{ rotate: spinInterpolate }] }}>
-                                <Settings size={22} color={colors.accent} />
-                            </Animated.View>
-                        </View>
-
-                        {/* Mode Indicator Badge */}
                         <View
                             style={[
-                                styles.modeBadge,
+                                styles.floatingButton,
                                 {
-                                    backgroundColor: colors.surfaceRaised,
-                                    borderColor: colors.borderActive,
+                                    backgroundColor: colors.floatingBg,
+                                    borderColor: colors.floatingBorder,
+                                    shadowColor: colors.floatingShadow,
                                 },
                             ]}
                         >
-                            {themeMode === 'light' ? (
-                                <Sun size={11} color={colors.warning} />
-                            ) : themeMode === 'dark' ? (
-                                <Moon size={11} color={colors.indigo} />
-                            ) : (
-                                <Sparkles size={11} color={colors.teal} />
-                            )}
+                            {/* Glow indicator with circulating slow-motion Settings gear */}
+                            <View style={[styles.innerGlow, { backgroundColor: colors.accentMuted }]}>
+                                <Animated.View style={{ transform: [{ rotate: spinInterpolate }] }}>
+                                    <Settings size={22} color={colors.accent} />
+                                </Animated.View>
+                            </View>
+
+                            {/* Mode Indicator Badge */}
+                            <View
+                                style={[
+                                    styles.modeBadge,
+                                    {
+                                        backgroundColor: colors.surfaceRaised,
+                                        borderColor: colors.borderActive,
+                                    },
+                                ]}
+                            >
+                                {themeMode === 'light' ? (
+                                    <Sun size={11} color={colors.warning} />
+                                ) : themeMode === 'dark' ? (
+                                    <Moon size={11} color={colors.indigo} />
+                                ) : (
+                                    <Sparkles size={11} color={colors.teal} />
+                                )}
+                            </View>
                         </View>
-                    </View>
-                </Animated.View>
-            </View>
+                    </Animated.View>
+                </View>
+            )}
 
             {/* Settings & Theme Selector Modal */}
             <Modal

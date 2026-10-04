@@ -1,16 +1,16 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import React, { useState, useEffect } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Platform, Keyboard } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
-    FileText,
     BookOpen,
-    Headphones,
-    GraduationCap,
+    Layers,
+    Award,
     MessageSquare,
 } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
-import { ThemeColors, typography, radii, darkShadows } from '../theme/tokens';
+import { ThemeColors, radii, darkShadows } from '../theme/tokens';
 
-export type TabKey = 'library' | 'flashcards' | 'audio' | 'quizzes' | 'tutor';
+export type TabKey = 'library' | 'courses' | 'test' | 'tutor';
 
 export interface BottomTabBarProps {
     activeTab: TabKey;
@@ -24,13 +24,39 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
     dueFlashcardsCount = 0,
 }) => {
     const { colors, shadows } = useTheme();
-    const styles = createStyles(colors, shadows);
+    let bottomInset = 0;
+    try {
+        const insets = useSafeAreaInsets();
+        bottomInset = insets?.bottom || 0;
+    } catch {
+        bottomInset = Platform.OS === 'ios' ? 20 : 8;
+    }
+    const styles = createStyles(colors, shadows, bottomInset);
+    const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+    useEffect(() => {
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            () => setIsKeyboardVisible(true)
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            () => setIsKeyboardVisible(false)
+        );
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+        };
+    }, []);
+
+    if (isKeyboardVisible) {
+        return null;
+    }
 
     const tabs: { key: TabKey; label: string; icon: any; badge?: number }[] = [
-        { key: 'library', label: 'Library', icon: FileText },
-        { key: 'flashcards', label: 'Flashcards', icon: BookOpen, badge: dueFlashcardsCount },
-        { key: 'audio', label: 'Audio & Notes', icon: Headphones },
-        { key: 'quizzes', label: 'Quizzes', icon: GraduationCap },
+        { key: 'library', label: 'Library', icon: BookOpen },
+        { key: 'courses', label: 'Course Hub', icon: Layers },
+        { key: 'test', label: 'Exam Prep', icon: Award },
         { key: 'tutor', label: 'AI Tutor', icon: MessageSquare },
     ];
 
@@ -46,13 +72,16 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
                             key={tab.key}
                             style={[styles.tabItem, isActive && styles.tabItemActive]}
                             onPress={() => onSelectTab(tab.key)}
-                            activeOpacity={0.7}
+                            activeOpacity={0.75}
+                            accessibilityRole="tab"
+                            accessibilityState={{ selected: isActive }}
+                            accessibilityLabel={`${tab.label} tab`}
                         >
                             <View style={styles.iconWrapper}>
                                 <Icon
                                     size={20}
-                                    color={isActive ? colors.accent : colors.textSubtle}
-                                    strokeWidth={isActive ? 2.3 : 1.8}
+                                    color={isActive ? colors.accent : colors.textMuted}
+                                    strokeWidth={1.5}
                                 />
                                 {tab.badge && tab.badge > 0 ? (
                                     <View style={styles.badge}>
@@ -68,7 +97,7 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
                             >
                                 {tab.label}
                             </Text>
-                            {isActive && <View style={styles.activeDot} />}
+                            {isActive && <View style={styles.activeIndicator} />}
                         </TouchableOpacity>
                     );
                 })}
@@ -77,35 +106,33 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
+const createStyles = (colors: ThemeColors, shadows: typeof darkShadows, bottomInset: number) =>
     StyleSheet.create({
         tabBarContainer: {
             position: 'absolute',
             bottom: 0,
             left: 0,
             right: 0,
-            backgroundColor: 'transparent',
-            paddingHorizontal: 12,
-            paddingBottom: Platform.OS === 'ios' ? 24 : 12,
+            backgroundColor: colors.surface,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 16 : 8),
             zIndex: 100,
         },
         bar: {
             flexDirection: 'row',
-            backgroundColor: colors.surfaceRaised,
-            borderRadius: radii.xxl || 24,
-            borderWidth: 1,
-            borderColor: colors.borderLight,
-            paddingVertical: 8,
-            paddingHorizontal: 4,
+            height: 56,
             alignItems: 'center',
             justifyContent: 'space-around',
-            ...shadows.modal,
+            paddingHorizontal: 8,
         },
         tabItem: {
             flex: 1,
+            minHeight: 48,
             alignItems: 'center',
             justifyContent: 'center',
             paddingVertical: 4,
+            paddingHorizontal: 2,
             position: 'relative',
         },
         tabItemActive: {},
@@ -114,42 +141,45 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
             alignItems: 'center',
             justifyContent: 'center',
             height: 24,
+            width: 24,
         },
         tabLabel: {
-            fontSize: 10,
-            fontWeight: '600',
-            color: colors.textSubtle,
-            marginTop: 4,
+            fontSize: 11,
+            fontWeight: '500',
+            color: colors.textMuted,
+            marginTop: 3,
+            textAlign: 'center',
+            letterSpacing: 0.1,
         },
         tabLabelActive: {
             color: colors.accent,
-            fontWeight: '800',
+            fontWeight: '600',
         },
-        activeDot: {
-            width: 4,
-            height: 4,
-            borderRadius: 2,
+        activeIndicator: {
+            position: 'absolute',
+            top: 0,
+            width: 24,
+            height: 2,
+            borderRadius: 1,
             backgroundColor: colors.accent,
-            marginTop: 2,
         },
         badge: {
             position: 'absolute',
-            top: -4,
-            right: -10,
+            top: -3,
+            right: -8,
             backgroundColor: colors.accent,
             borderRadius: 8,
             paddingHorizontal: 4,
             paddingVertical: 1,
-            minWidth: 16,
+            minWidth: 14,
             alignItems: 'center',
             justifyContent: 'center',
         },
         badgeText: {
             color: colors.textInverse,
-            fontSize: 8,
-            fontWeight: '800',
+            fontSize: 9,
+            fontWeight: '700',
         },
     });
 
 export default BottomTabBar;
-

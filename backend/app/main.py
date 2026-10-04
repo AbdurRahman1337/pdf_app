@@ -12,6 +12,8 @@ from app.api.routes_upload import router as upload_router
 from app.api.routes_chat import router as chat_router
 from app.api.routes_quiz import router as quiz_router
 from app.api.routes_mobile_compat import router as mobile_compat_router
+from app.api.routes_exam_prep import router as exam_prep_router
+from app.api.routes_courses import router as courses_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -43,6 +45,8 @@ app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(quiz_router)
 app.include_router(mobile_compat_router)
+app.include_router(exam_prep_router)
+app.include_router(courses_router)
 
 # Also expose under /api and /api/v1 prefixes for standard client setups & mobile
 app.include_router(health_router, prefix="/api")
@@ -50,12 +54,16 @@ app.include_router(upload_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(quiz_router, prefix="/api")
 app.include_router(mobile_compat_router, prefix="/api")
+app.include_router(exam_prep_router, prefix="/api")
+app.include_router(courses_router, prefix="/api")
 
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(upload_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(quiz_router, prefix="/api/v1")
 app.include_router(mobile_compat_router, prefix="/api/v1")
+app.include_router(exam_prep_router, prefix="/api/v1")
+app.include_router(courses_router, prefix="/api/v1")
 
 # 5. Static Files and Frontend Single Page App serving
 static_dir = os.path.join(os.path.dirname(__file__), "static")
