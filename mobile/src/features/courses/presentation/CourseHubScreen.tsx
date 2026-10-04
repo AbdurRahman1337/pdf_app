@@ -12,7 +12,7 @@ import {
     Alert,
     Platform,
     Share,
-    FlatList,
+    Animated,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -38,19 +38,29 @@ import {
     RotateCcw,
     SlidersHorizontal,
     Maximize2,
-    Minimize2,
     BookMarked,
     X,
+    Eye,
+    EyeOff,
+    Flame,
+    ArrowRight,
+    ArrowLeft,
+    Lightbulb,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import ttsService from '../../../core/tts/ttsService';
 import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
+import { ThemeColors, typography, radii, spacing, gradients } from '../../../core/theme/tokens';
+import { motion, triggerHaptic, getIsReducedMotion } from '../../../core/theme/motion';
 import SegmentedControl from '../../../core/components/SegmentedControl';
 import EmptyState from '../../../core/components/EmptyState';
 import CitationModal from '../../../core/components/CitationModal';
+import Toast from '../../../core/components/Toast';
+import ProgressRing from '../../../core/components/ProgressRing';
 import { CardSkeleton, ParagraphSkeleton } from '../../../core/components/LoadingSkeleton';
-import { LAST_STUDY_CONTEXT_KEY, DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc } from '../../pdf-list/presentation/DashboardScreen';
+import { AnimatedPressable } from '../../../core/components/AnimatedPressable';
+import { GradientView, GradientButton } from '../../../core/components/GradientView';
+import { LAST_STUDY_CONTEXT_KEY, DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc, formatFileSize } from '../../pdf-list/presentation/DashboardScreen';
 
 type HubSectionTab = 'summary' | 'words' | 'quiz' | 'ask';
 type SummaryLength = 'brief' | 'standard' | 'detailed';
@@ -86,8 +96,9 @@ interface ChatMessage {
 
 const CourseHubScreen = ({ route, navigation }: any) => {
     const routeParams = route?.params || {};
-    const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const { colors, shadows, isDark, typography } = useTheme();
+    const tabAccent = colors.tabCourseHub; // Blue #2F6FED
+    const styles = useMemo(() => createStyles(colors, shadows, tabAccent), [colors, shadows, tabAccent]);
 
     // Active Context State (Course -> Subject -> PDF)
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
@@ -101,10 +112,9 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     // Document Picker Modal
     const [isDocPickerOpen, setIsDocPickerOpen] = useState(false);
 
-    // PDF Reader Viewer Mode (Fullscreen reader on phones)
-    const [isViewerExpanded, setIsViewerExpanded] = useState(false);
-    const [activeViewerPage, setActiveViewerPage] = useState<number>(1);
-    const [highlightSnippet, setHighlightSnippet] = useState<string | null>(null);
+    // Toast State
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
+    const [lastKnownWordUndo, setLastKnownWordUndo] = useState<{ id: string; prevKnown: boolean } | null>(null);
 
     // ── Summary State ──
     const [summaryLength, setSummaryLength] = useState<SummaryLength>('standard');
@@ -114,7 +124,11 @@ const CourseHubScreen = ({ route, navigation }: any) => {
         keyPoints: string[];
         sections: { title: string; content: string; page?: number }[];
     } | null>(null);
-    const [expandedSections, setExpandedSections] = useState<Record<number, boolean>>({ 0: true });
+    const [expandedSections, setExpandedSections] = useState<Record<number, boolean>>({ 0: true, 1: true });
+
+    // Audio Narration State
+    const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+    const [speechRate, setSpeechRate] = useState<number>(1.0);
 
     // ── Words State ──
     const [words, setWords] = useState<WordCardItem[]>([]);
@@ -124,6 +138,9 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     const [isFlashcardOpen, setIsFlashcardOpen] = useState(false);
     const [flashcardIndex, setFlashcardIndex] = useState(0);
     const [isCardFlipped, setIsCardFlipped] = useState(false);
+
+    // 3D Flip animation
+    const flipAnim = useRef(new Animated.Value(0)).current;
 
     // ── Quiz State ──
     const [quizSource, setQuizSource] = useState<'doc' | 'subject' | 'course'>('doc');
@@ -135,6 +152,7 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     const [currentQuizIndex, setCurrentQuizIndex] = useState(0);
     const [selectedQuizAnswers, setSelectedQuizAnswers] = useState<Record<number, string>>({});
     const [quizCompleted, setQuizCompleted] = useState(false);
+    const [shakeAnim] = useState(new Animated.Value(0));
 
     // ── Ask / Scoped Chat State ──
     const [messages, setMessages] = useState<ChatMessage[]>([]);
@@ -145,6 +163,9 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     // Initialize from storage or incoming navigation params
     useEffect(() => {
         loadStudyContext();
+        return () => {
+            ttsService.stop();
+        };
     }, [routeParams]);
 
     const loadStudyContext = async () => {
@@ -159,7 +180,6 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                 }
             }
 
-            // Check if passed via route params
             let targetCourseId = routeParams.courseId;
             let targetSubjectId = routeParams.subjectId;
             let targetDocId = routeParams.pdfId;
@@ -192,7 +212,6 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     };
 
     const loadDocumentMaterials = async (id: string, courseTitle: string, subName: string) => {
-        // Fetch or synthesize Summary & Words
         setSummaryLoading(true);
         setWordsLoading(true);
 
@@ -206,9 +225,9 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                 setSummaryData({
                     overview: brief,
                     keyPoints: rawPoints.length > 0 ? rawPoints : [
-                        'Cellular compartmentalization enables specialization of metabolic pathways.',
+                        'Cellular compartmentalization enables specialization of distinct metabolic pathways.',
                         'Adenosine triphosphate (ATP) acts as the primary biochemical energy currency.',
-                        'Membrane selective permeability regulates homeostasis and signal transduction.',
+                        'Membrane selective permeability regulates homeostasis and ion signal transduction.',
                     ],
                     sections: [
                         {
@@ -223,7 +242,7 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                         },
                         {
                             title: '3. Clinical Correlations & Diagnostic Edge Cases',
-                            content: 'Mitochondrial DNA mutations exhibit strictly maternal inheritance and manifest predominantly in high-energy consumption tissues like neuromuscular systems.',
+                            content: 'Mitochondrial DNA mutations exhibit strictly maternal inheritance and manifest predominantly in high-energy consumption tissues.',
                             page: 8,
                         },
                     ],
@@ -235,7 +254,7 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                     term: v.term,
                     part_of_speech: idx % 2 === 0 ? 'noun' : 'adjective',
                     definition: v.definition,
-                    sentence: `In physiological cellular conditions, ${v.term.toLowerCase()} plays a decisive regulatory role.`,
+                    sentence: `In physiological conditions, ${v.term.toLowerCase()} plays a decisive regulatory and catalytic role.`,
                     page: (idx % 6) + 2,
                     isKnown: false,
                 }));
@@ -253,23 +272,22 @@ const CourseHubScreen = ({ route, navigation }: any) => {
             setWordsLoading(false);
         }
 
-        // Initialize Chat with Starter Message
         setMessages([
             {
                 id: 'welcome_ai',
                 sender: 'ai',
-                text: `Welcome to **${subName}**. I am your scoped tutor grounded directly in this material. Ask me about definitions, mechanisms, clinical correlations, or specific page citations.`,
+                text: `Welcome to **${subName}**. I am your AI study tutor grounded in your course materials. Ask me about concepts, mechanisms, key definitions, or page citations.`,
                 scopeLabel: `${courseTitle} › ${subName}`,
             },
         ]);
     };
 
     const getFallbackSummary = (subName: string) => ({
-        overview: `Comprehensive academic synthesis of ${subName}. This unit develops core foundational principles, analytical reasoning, and high-yield examination concepts.`,
+        overview: `Comprehensive academic synthesis of ${subName}. This module develops fundamental concepts, analytical reasoning, and high-yield examination topics.`,
         keyPoints: [
-            `Fundamental conceptual frameworks and governing laws of ${subName}.`,
-            'High-yield reaction sequences, formulas, and structural relationships.',
-            'Diagnostic criteria, clinical applications, and common exam distractors.',
+            `Core foundational principles and governing laws of ${subName}.`,
+            'High-yield reaction pathways, formulaic relationships, and diagrams.',
+            'Diagnostic criteria, exam pitfalls, and boundary condition nuances.',
         ],
         sections: [
             {
@@ -283,8 +301,8 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                 page: 6,
             },
             {
-                title: '3. High-Yield Exam Pitfalls',
-                content: 'Common misconception traps, unit conversion nuances, and boundary-condition exceptions.',
+                title: '3. High-Yield Examination Traps',
+                content: 'Common misconception traps, unit conversion nuances, and clinical boundary conditions.',
                 page: 11,
             },
         ],
@@ -296,7 +314,7 @@ const CourseHubScreen = ({ route, navigation }: any) => {
             term: 'Chemiosmosis',
             part_of_speech: 'noun',
             definition: 'The movement of ions across a semipermeable membrane down their electrochemical gradient.',
-            sentence: 'During aerobic respiration, chemiosmosis generates the vast majority of cellular ATP.',
+            sentence: 'During oxidative phosphorylation, chemiosmosis generates the vast majority of cellular ATP.',
             page: 3,
             isKnown: false,
         },
@@ -305,240 +323,320 @@ const CourseHubScreen = ({ route, navigation }: any) => {
             term: 'Allosteric Regulation',
             part_of_speech: 'noun',
             definition: 'The regulation of an enzyme by binding an effector molecule at a site other than the active site.',
-            sentence: 'Feedback inhibition operates through allosteric regulation to prevent substrate accumulation.',
+            sentence: 'Phosphofructokinase undergoes allosteric regulation by ATP and AMP to throttle glycolysis.',
             page: 5,
-            isKnown: true,
+            isKnown: false,
         },
         {
             id: 'w3',
-            term: 'Electronegativity',
+            term: 'Enthalpy',
             part_of_speech: 'noun',
-            definition: 'A chemical property that describes the tendency of an atom to attract electrons towards itself.',
-            sentence: 'The electronegativity difference between bonded atoms determines dipole moment strength.',
+            definition: 'A thermodynamic quantity equivalent to the total heat content of a chemical system.',
+            sentence: 'A negative change in enthalpy indicates an exothermic reaction releasing thermal energy.',
             page: 7,
             isKnown: false,
         },
         {
             id: 'w4',
-            term: 'Homeostasis',
+            term: 'Electronegativity',
             part_of_speech: 'noun',
-            definition: 'The state of steady internal conditions maintained by living living organisms.',
-            sentence: 'Negative feedback loops are essential for maintaining physiological homeostasis.',
+            definition: 'A chemical property that describes the tendency of an atom to attract a shared pair of electrons.',
+            sentence: 'Fluorine exhibits the highest electronegativity on the Pauling scale.',
             page: 9,
             isKnown: false,
         },
     ];
 
-    // Handle Subject Switch
-    const handleSelectSubject = (subject: SubjectItem) => {
-        setSelectedSubject(subject);
-        const doc = subject.documents[0] || null;
-        setSelectedDoc(doc);
-        loadDocumentMaterials(doc?.id || subject.id, selectedCourse.title, subject.name);
-    };
-
-    // Handle Document Switch
-    const handleSelectDoc = (doc: PDFDoc) => {
-        setSelectedDoc(doc);
-        setIsDocPickerOpen(false);
-        loadDocumentMaterials(doc.id, selectedCourse.title, selectedSubject.name);
-    };
-
-    // Filtered words
-    const filteredWords = useMemo(() => {
-        let list = [...words];
-        if (wordFilter === 'to_learn') list = list.filter((w) => !w.isKnown);
-        if (wordFilter === 'known') list = list.filter((w) => w.isKnown);
-        if (wordSearch.trim()) {
-            const q = wordSearch.toLowerCase();
-            list = list.filter(
-                (w) => w.term.toLowerCase().includes(q) || w.definition.toLowerCase().includes(q)
-            );
+    // ── Audio TTS Narration ──
+    const handleToggleAudio = async () => {
+        if (isPlayingAudio) {
+            await ttsService.stop();
+            setIsPlayingAudio(false);
+            return;
         }
-        return list;
-    }, [words, wordFilter, wordSearch]);
 
-    // Toggle Mark As Known
-    const toggleWordKnown = (wordId: string) => {
+        let textToRead = `${selectedSubject?.name || 'Course'}. `;
+        if (summaryData) {
+            textToRead += `Overview: ${summaryData.overview}. `;
+            textToRead += `Key takeaways: ${summaryData.keyPoints.join('. ')}. `;
+        }
+
+        setIsPlayingAudio(true);
+        triggerHaptic('selection');
+        await ttsService.speak(textToRead, {
+            rate: speechRate,
+            onDone: () => setIsPlayingAudio(false),
+            onStopped: () => setIsPlayingAudio(false),
+            onError: () => setIsPlayingAudio(false),
+        });
+    };
+
+    const handleCycleAudioRate = () => {
+        const rates = [0.8, 1.0, 1.25, 1.5];
+        const nextIdx = (rates.indexOf(speechRate) + 1) % rates.length;
+        const newRate = rates[nextIdx];
+        setSpeechRate(newRate);
+        ttsService.setRate(newRate);
+        if (isPlayingAudio) {
+            handleToggleAudio();
+            setTimeout(() => handleToggleAudio(), 200);
+        }
+    };
+
+    // ── Word "Mark as Known" with Undo ──
+    const handleToggleKnown = (wordId: string) => {
+        triggerHaptic('selection');
         setWords((prev) =>
-            prev.map((w) => (w.id === wordId ? { ...w, isKnown: !w.isKnown } : w))
+            prev.map((w) => {
+                if (w.id === wordId) {
+                    const newKnown = !w.isKnown;
+                    setLastKnownWordUndo({ id: wordId, prevKnown: !!w.isKnown });
+                    setToastMessage(newKnown ? `Marked "${w.term}" as known` : `Moved "${w.term}" to study list`);
+                    return { ...w, isKnown: newKnown };
+                }
+                return w;
+            })
         );
     };
 
-    // Export Vocabulary as CSV
-    const handleExportCSV = async () => {
-        if (words.length === 0) return;
-        const csvRows = ['Term,Part of Speech,Definition,Sentence,Page,Status'];
-        words.forEach((w) => {
-            const row = `"${w.term}","${w.part_of_speech || ''}","${w.definition.replace(/"/g, '""')}","${(w.sentence || '').replace(/"/g, '""')}","p. ${w.page || 1}","${w.isKnown ? 'Known' : 'To Learn'}"`;
-            csvRows.push(row);
-        });
-        const csvContent = csvRows.join('\n');
-
-        try {
-            await Share.share({
-                title: `${selectedSubject.name}_Vocabulary.csv`,
-                message: csvContent,
-            });
-        } catch (e) {
-            console.warn('Share CSV notice:', e);
+    const handleUndoKnown = () => {
+        if (lastKnownWordUndo) {
+            setWords((prev) =>
+                prev.map((w) => (w.id === lastKnownWordUndo.id ? { ...w, isKnown: lastKnownWordUndo.prevKnown } : w))
+            );
+            setLastKnownWordUndo(null);
+            setToastMessage('Restored word state');
         }
     };
 
-    // Jump viewer to citation page and highlight passage
-    const handleJumpToCitation = (page: number, snippet: string) => {
-        setActiveViewerPage(page);
-        setHighlightSnippet(snippet);
-        setIsViewerExpanded(true);
+    // Filtered vocabulary list
+    const filteredWords = useMemo(() => {
+        return words.filter((w) => {
+            const matchesSearch =
+                w.term.toLowerCase().includes(wordSearch.toLowerCase()) ||
+                w.definition.toLowerCase().includes(wordSearch.toLowerCase());
+            if (!matchesSearch) return false;
+            if (wordFilter === 'to_learn') return !w.isKnown;
+            if (wordFilter === 'known') return w.isKnown;
+            return true;
+        });
+    }, [words, wordSearch, wordFilter]);
+
+    // ── Flashcards 3D Flip Handler ──
+    const handleFlipCard = () => {
+        triggerHaptic('selection');
+        if (getIsReducedMotion()) {
+            setIsCardFlipped(!isCardFlipped);
+            return;
+        }
+
+        Animated.timing(flipAnim, {
+            toValue: isCardFlipped ? 0 : 180,
+            duration: motion.durations.flip,
+            easing: motion.easings.easeOutCubic,
+            useNativeDriver: true,
+        }).start(() => {
+            setIsCardFlipped(!isCardFlipped);
+        });
     };
 
-    // ── Generate & Take Practice Quiz ──
-    const handleStartPracticeQuiz = async () => {
+    const handleNextFlashcard = () => {
+        triggerHaptic('selection');
+        setIsCardFlipped(false);
+        flipAnim.setValue(0);
+        if (flashcardIndex < filteredWords.length - 1) {
+            setFlashcardIndex(flashcardIndex + 1);
+        } else {
+            setFlashcardIndex(0);
+        }
+    };
+
+    const handlePrevFlashcard = () => {
+        triggerHaptic('selection');
+        setIsCardFlipped(false);
+        flipAnim.setValue(0);
+        if (flashcardIndex > 0) {
+            setFlashcardIndex(flashcardIndex - 1);
+        }
+    };
+
+    // ── Quiz Generation & Submission ──
+    const handleStartQuiz = async () => {
         setQuizLoading(true);
         setIsQuizActive(true);
+        setQuizCompleted(false);
         setSelectedQuizAnswers({});
         setCurrentQuizIndex(0);
-        setQuizCompleted(false);
+        triggerHaptic('selection');
 
         try {
-            const payload = {
-                topic: `${selectedSubject.name} Concept Practice`,
-                num_questions: quizCount,
+            const res = await apiClient.post('/quiz/generate', {
+                topic: `${selectedCourse.title} - ${selectedSubject.name}`,
                 pdf_id: quizSource === 'doc' ? selectedDoc?.id : undefined,
-            };
+                num_questions: quizCount,
+            }).catch(() => null);
 
-            const res = await apiClient.post('/quiz/generate', payload).catch(() => null);
             if (res && res.data && res.data.questions && res.data.questions.length > 0) {
-                const builtQs: QuizItem[] = res.data.questions.map((q: any, idx: number) => ({
-                    id: idx + 1,
-                    question: q.question,
-                    options: q.options,
-                    correct_answer: q.correct_answer,
-                    explanation: q.explanation,
-                    page: (idx % 8) + 2,
-                    topic: selectedSubject.name,
-                }));
-                setQuizQuestions(builtQs);
+                setQuizQuestions(res.data.questions);
             } else {
-                setQuizQuestions(getFallbackQuiz(selectedSubject.name));
+                setQuizQuestions(getFallbackQuizQuestions(selectedSubject.name));
             }
         } catch {
-            setQuizQuestions(getFallbackQuiz(selectedSubject.name));
+            setQuizQuestions(getFallbackQuizQuestions(selectedSubject.name));
         } finally {
             setQuizLoading(false);
         }
     };
 
-    const getFallbackQuiz = (subName: string): QuizItem[] => [
+    const getFallbackQuizQuestions = (subName: string): QuizItem[] => [
         {
             id: 1,
-            question: `In ${subName}, which organelle or mechanism directly powers active proton translocation across the membrane?`,
-            options: ['ATP Synthase', 'Electron Transport Chain (Complex I-IV)', 'Sodium-Potassium ATPase', 'Voltage-Gated Channel'],
-            correct_answer: 'Electron Transport Chain (Complex I-IV)',
-            explanation: 'The redox reactions of Complexes I, III, and IV pump protons into the intermembrane space, generating the proton motive force.',
+            question: `What is the primary thermodynamic driving force during chemiosmosis in ${subName}?`,
+            options: [
+                'Proton motive force across the inner membrane',
+                'Direct hydrolysis of glucose in cytosol',
+                'Osmotic expansion of mitochondrial matrix',
+                'Active sodium-potassium ATPase pump',
+            ],
+            correct_answer: 'Proton motive force across the inner membrane',
+            explanation: 'The proton gradient generated by the electron transport chain powers ATP synthase via the proton motive force.',
             page: 4,
-            topic: subName,
+            topic: 'Bioenergetics',
         },
         {
             id: 2,
-            question: `What primary kinetic outcome occurs when a non-competitive allosteric inhibitor binds an enzyme in ${subName}?`,
-            options: ['Vmax decreases, Km remains unchanged', 'Vmax remains unchanged, Km increases', 'Both Vmax and Km decrease', 'Km increases linearly'],
-            correct_answer: 'Vmax decreases, Km remains unchanged',
-            explanation: 'Non-competitive inhibitors do not compete for the active site, thereby lowering the effective Vmax without altering substrate affinity (Km).',
-            page: 6,
-            topic: subName,
+            question: 'Which of the following best characterizes allosteric enzyme inhibition?',
+            options: [
+                'Binding at an allosteric site altering active site conformation',
+                'Direct competitive binding at the active substrate pocket',
+                'Irreversible covalent denaturation of polypeptide chains',
+                'Non-specific ionic precipitation of the enzyme',
+            ],
+            correct_answer: 'Binding at an allosteric site altering active site conformation',
+            explanation: 'Allosteric effectors bind away from the active catalytic site, inducing a conformational change that alters affinity.',
+            page: 7,
+            topic: 'Enzymology',
         },
         {
             id: 3,
-            question: `Which fundamental law explains why heat flows spontaneously from higher temperature to lower temperature systems?`,
-            options: ['First Law of Thermodynamics', 'Second Law of Thermodynamics', 'Mendels Law of Segregation', 'Hesss Law of Heat Summation'],
-            correct_answer: 'Second Law of Thermodynamics',
-            explanation: 'The Second Law states that the total entropy of an isolated system always increases over time in spontaneous processes.',
+            question: 'Mitochondrial DNA mutations characteristically show which inheritance pattern?',
+            options: [
+                'Strictly maternal transmission',
+                'Autosomal dominant inheritance',
+                'X-linked recessive transmission',
+                'Holandric Y-linked inheritance',
+            ],
+            correct_answer: 'Strictly maternal transmission',
+            explanation: 'Mitochondria are inherited exclusively from the maternal oocyte cytoplasm.',
             page: 9,
-            topic: subName,
+            topic: 'Genetics',
         },
     ];
 
-    // Handle Quiz Answer Selection
     const handleSelectQuizAnswer = (option: string) => {
-        const q = quizQuestions[currentQuizIndex];
-        if (!q || selectedQuizAnswers[q.id]) return; // Answered already
-        setSelectedQuizAnswers((prev) => ({ ...prev, [q.id]: option }));
+        if (selectedQuizAnswers[currentQuizIndex] !== undefined) return; // Answered already
+
+        const currentQ = quizQuestions[currentQuizIndex];
+        const isCorrect = option === currentQ.correct_answer;
+
+        if (isCorrect) {
+            triggerHaptic('success');
+        } else {
+            triggerHaptic('error');
+            // Shake animation for wrong answer
+            if (!getIsReducedMotion()) {
+                Animated.sequence([
+                    Animated.timing(shakeAnim, { toValue: 8, duration: 60, useNativeDriver: true }),
+                    Animated.timing(shakeAnim, { toValue: -8, duration: 60, useNativeDriver: true }),
+                    Animated.timing(shakeAnim, { toValue: 6, duration: 60, useNativeDriver: true }),
+                    Animated.timing(shakeAnim, { toValue: -6, duration: 60, useNativeDriver: true }),
+                    Animated.timing(shakeAnim, { toValue: 0, duration: 60, useNativeDriver: true }),
+                ]).start();
+            }
+        }
+
+        setSelectedQuizAnswers((prev) => ({
+            ...prev,
+            [currentQuizIndex]: option,
+        }));
     };
 
-    // Calculate Quiz Score
-    const quizScore = useMemo(() => {
+    const handleNextQuizQuestion = () => {
+        triggerHaptic('selection');
+        if (currentQuizIndex < quizQuestions.length - 1) {
+            setCurrentQuizIndex(currentQuizIndex + 1);
+        } else {
+            setQuizCompleted(true);
+        }
+    };
+
+    const quizScoreCount = useMemo(() => {
         let correct = 0;
-        quizQuestions.forEach((q) => {
-            if (selectedQuizAnswers[q.id] === q.correct_answer) {
-                correct += 1;
+        quizQuestions.forEach((q, idx) => {
+            if (selectedQuizAnswers[idx] === q.correct_answer) {
+                correct++;
             }
         });
-        return {
-            correct,
-            total: quizQuestions.length,
-            percentage: quizQuestions.length > 0 ? Math.round((correct / quizQuestions.length) * 100) : 0,
-        };
+        return correct;
     }, [quizQuestions, selectedQuizAnswers]);
 
-    const missedQuestions = useMemo(() => {
-        return quizQuestions.filter((q) => selectedQuizAnswers[q.id] && selectedQuizAnswers[q.id] !== q.correct_answer);
-    }, [quizQuestions, selectedQuizAnswers]);
+    const quizScorePercentage = useMemo(() => {
+        if (quizQuestions.length === 0) return 0;
+        return Math.round((quizScoreCount / quizQuestions.length) * 100);
+    }, [quizScoreCount, quizQuestions]);
 
-    // ── Scoped Chat Message Send ──
-    const handleSendChatMessage = async () => {
-        if (!chatInput.trim()) return;
+    // ── Send Scoped Chat Question ──
+    const handleSendChat = async () => {
+        const query = chatInput.trim();
+        if (!query || chatLoading) return;
 
-        const userMsgText = chatInput.trim();
+        triggerHaptic('selection');
         const userMsg: ChatMessage = {
-            id: `user_${Date.now()}`,
+            id: `usr_${Date.now()}`,
             sender: 'user',
-            text: userMsgText,
+            text: query,
         };
 
-        setMessages((prev) => [...prev, userMsg]);
+        const updated = [...messages, userMsg];
+        setMessages(updated);
         setChatInput('');
         setChatLoading(true);
 
-        const currentScope = `${selectedCourse.title} › ${selectedSubject.name}${selectedDoc ? ` › ${selectedDoc.filename}` : ''}`;
-
         try {
             const res = await apiClient.post('/ai/query', {
-                question: userMsgText,
+                question: query,
                 pdf_id: selectedDoc?.id,
             }).catch(() => null);
 
+            let aiText = '';
+            let citations: { page: number; snippet: string }[] = [];
+
             if (res && res.data && res.data.answer) {
-                const answerText = res.data.answer;
-                const aiMsg: ChatMessage = {
-                    id: `ai_${Date.now()}`,
-                    sender: 'ai',
-                    text: answerText,
-                    scopeLabel: currentScope,
-                    citations: [
-                        { page: 2, snippet: 'Directly supported in Chapter Overview and transport section.' },
-                        { page: 5, snippet: 'Verified experimental mechanism on membrane potential.' },
-                    ],
-                };
-                setMessages((prev) => [...prev, aiMsg]);
+                aiText = res.data.answer;
+                citations = [
+                    { page: 3, snippet: 'Supported by core syllabus chapter mechanics.' },
+                    { page: 6, snippet: 'Chemical dynamics and structural parameters.' },
+                ];
             } else {
-                const fallbackAi: ChatMessage = {
-                    id: `ai_${Date.now()}`,
-                    sender: 'ai',
-                    text: `Based on your **${selectedSubject.name}** notes, this concept follows the primary physiological mechanisms detailed on page 3.`,
-                    scopeLabel: currentScope,
-                    citations: [{ page: 3, snippet: 'Fundamental definition and mechanism summary.' }],
-                };
-                setMessages((prev) => [...prev, fallbackAi]);
+                aiText = `Based on **${selectedSubject.name}**, key mechanisms operate via strict thermodynamic and enzymatic regulation. Consult page citations below for exact passage excerpts.`;
+                citations = [{ page: 4, snippet: 'Foundational axioms and metabolic pathways.' }];
             }
-        } catch {
-            const calmFallback: ChatMessage = {
+
+            const aiMsg: ChatMessage = {
                 id: `ai_${Date.now()}`,
                 sender: 'ai',
-                text: "I couldn't find this specific detail in your uploaded material for this subject. Try broadening your query or selecting the whole course scope.",
-                scopeLabel: currentScope,
+                text: aiText,
+                scopeLabel: `${selectedCourse.title} › ${selectedSubject.name}`,
+                citations,
             };
-            setMessages((prev) => [...prev, calmFallback]);
+            setMessages([...updated, aiMsg]);
+        } catch {
+            const errorAi: ChatMessage = {
+                id: `ai_${Date.now()}`,
+                sender: 'ai',
+                text: "I couldn't find this in your material. Make sure your course documents cover this topic, or expand your scope.",
+            };
+            setMessages([...updated, errorAi]);
         } finally {
             setChatLoading(false);
         }
@@ -546,151 +644,116 @@ const CourseHubScreen = ({ route, navigation }: any) => {
 
     return (
         <View style={styles.container}>
-            {/* Top Course & Document Header */}
-            <View style={styles.header}>
-                <View style={styles.courseTitleRow}>
+            {/* Header with Course Title & Subject Chips */}
+            <View style={styles.hubHeader}>
+                <View style={styles.hubTitleRow}>
                     <View style={{ flex: 1 }}>
-                        <Text style={styles.courseHeaderTitle} numberOfLines={1}>
+                        <Text style={styles.courseEyebrow} numberOfLines={1}>
                             {selectedCourse.title}
                         </Text>
-                        <TouchableOpacity
-                            style={styles.docPickerTrigger}
-                            onPress={() => setIsDocPickerOpen(true)}
-                            accessibilityRole="button"
-                            accessibilityLabel="Choose document"
-                        >
-                            <FileText size={14} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 5 }} />
-                            <Text style={styles.docPickerText} numberOfLines={1}>
-                                {selectedDoc?.filename || 'No document selected'}
-                            </Text>
-                            <ChevronDown size={14} color={colors.textMuted} strokeWidth={1.5} />
-                        </TouchableOpacity>
+                        <Text style={styles.subjectMainTitle} numberOfLines={1}>
+                            {selectedSubject?.name || 'Course Hub'}
+                        </Text>
                     </View>
 
-                    <TouchableOpacity
-                        style={styles.viewerToggleBtn}
-                        onPress={() => setIsViewerExpanded(!isViewerExpanded)}
-                        accessibilityRole="button"
-                        accessibilityLabel={isViewerExpanded ? 'Collapse PDF reader' : 'Open PDF reader'}
+                    <AnimatedPressable
+                        style={[styles.docPickerBtn, { backgroundColor: colors.surfaceRaised }]}
+                        onPress={() => setIsDocPickerOpen(true)}
                     >
-                        {isViewerExpanded ? (
-                            <Minimize2 size={18} color={colors.text} strokeWidth={1.5} />
-                        ) : (
-                            <Maximize2 size={18} color={colors.text} strokeWidth={1.5} />
-                        )}
-                    </TouchableOpacity>
+                        <FileText size={15} color={tabAccent} strokeWidth={2} style={{ marginRight: 6 }} />
+                        <Text style={[styles.docPickerText, { color: colors.text }]} numberOfLines={1}>
+                            {selectedDoc ? selectedDoc.filename.split('.')[0] : 'All PDFs'}
+                        </Text>
+                        <ChevronDown size={14} color={colors.textMuted} strokeWidth={2} style={{ marginLeft: 4 }} />
+                    </AnimatedPressable>
                 </View>
 
-                {/* Horizontal Subject Switcher Chips */}
+                {/* Horizontal Subject Chips */}
                 <ScrollView
                     horizontal
                     showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.subjectChipsContainer}
+                    contentContainerStyle={styles.subjectChipsScroll}
                 >
-                    {selectedCourse.subjects.map((sub) => {
+                    {(selectedCourse.subjects || []).map((sub, idx) => {
                         const isSelected = selectedSubject?.id === sub.id;
+                        const subColor = sub.color || ['#0D9488', '#2F6FED', '#F2644A'][idx % 3];
+
                         return (
-                            <TouchableOpacity
+                            <AnimatedPressable
                                 key={sub.id}
                                 style={[
                                     styles.subjectChip,
-                                    isSelected && styles.subjectChipActive,
-                                    isSelected && { borderColor: colors.accent, backgroundColor: colors.accentMuted },
+                                    {
+                                        backgroundColor: isSelected ? tabAccent : colors.surfaceRaised,
+                                        borderColor: isSelected ? tabAccent : colors.border,
+                                    },
                                 ]}
-                                onPress={() => handleSelectSubject(sub)}
-                                activeOpacity={0.7}
+                                onPress={() => {
+                                    triggerHaptic('selection');
+                                    setSelectedSubject(sub);
+                                    const firstDoc = sub.documents[0] || null;
+                                    setSelectedDoc(firstDoc);
+                                    loadDocumentMaterials(firstDoc?.id || sub.id, selectedCourse.title, sub.name);
+                                }}
                             >
-                                <View
-                                    style={[
-                                        styles.chipDot,
-                                        { backgroundColor: isSelected ? colors.accent : colors.textMuted },
-                                    ]}
-                                />
+                                <View style={[styles.subjectChipDot, { backgroundColor: isSelected ? '#FFFFFF' : subColor }]} />
                                 <Text
                                     style={[
                                         styles.subjectChipText,
-                                        isSelected && { color: colors.accent, fontWeight: '600' },
+                                        { color: isSelected ? '#FFFFFF' : colors.text },
                                     ]}
                                 >
                                     {sub.name}
                                 </Text>
-                            </TouchableOpacity>
+                            </AnimatedPressable>
                         );
                     })}
                 </ScrollView>
-            </View>
 
-            {/* Split / Collapsible Layout for PDF Viewer on Desktop & Phone */}
-            {isViewerExpanded && (
-                <View style={styles.pdfViewerContainer}>
-                    <View style={styles.pdfPageHeader}>
-                        <Text style={styles.pdfPageIndicator}>
-                            Page {activeViewerPage} of {selectedDoc ? '14' : '1'} · Paper Reader
-                        </Text>
-                        <TouchableOpacity onPress={() => setIsViewerExpanded(false)}>
-                            <X size={18} color={colors.textMuted} />
-                        </TouchableOpacity>
-                    </View>
-
-                    {/* Paper-Toned Reading Canvas */}
-                    <ScrollView style={[styles.pdfPaperCanvas, { backgroundColor: colors.pdfPaper }]}>
-                        <Text style={styles.pdfPaperHeading}>
-                            {selectedDoc?.filename.replace(/\.pdf$/i, '').replace(/_/g, ' ') || selectedSubject.name}
-                        </Text>
-                        <Text style={styles.pdfPaperMeta}>Section 3.1 — Foundational Syllabus</Text>
-
-                        {highlightSnippet ? (
-                            <View style={[styles.citationHighlightBlock, { backgroundColor: colors.highlight }]}>
-                                <Text style={[styles.citationHighlightText, { color: colors.highlightText }]}>
-                                    "{highlightSnippet}"
-                                </Text>
-                            </View>
-                        ) : null}
-
-                        <Text style={styles.pdfPaperBody}>
-                            Biological systems sustain metabolic equilibria via tight chemiosmotic coordination across cellular organelles. Selective solute transport, receptor dimerization, and bioenergetic enzymatic synthesis govern cellular homeostasis.
-                        </Text>
-                        <Text style={styles.pdfPaperBody}>
-                            Experimental kinetics verify that allosteric regulators modulate substrate turn-over frequency without covalently altering active catalytic residues.
-                        </Text>
-                    </ScrollView>
+                {/* 4-Section Segmented Control */}
+                <View style={{ marginTop: 12 }}>
+                    <SegmentedControl
+                        options={[
+                            { key: 'summary', label: 'Summary', icon: BookOpen },
+                            { key: 'words', label: 'Words', icon: Sparkles, badgeCount: words.filter((w) => !w.isKnown).length },
+                            { key: 'quiz', label: 'Quiz', icon: Lightbulb },
+                            { key: 'ask', label: 'Ask Tutor', icon: MessageSquare },
+                        ]}
+                        selectedKey={activeSection}
+                        onSelect={(key) => setActiveSection(key as HubSectionTab)}
+                        activeColor={tabAccent}
+                    />
                 </View>
-            )}
-
-            {/* AI Control Center Tabs: Summary · Words · Quiz · Ask */}
-            <View style={styles.segmentedControlContainer}>
-                <SegmentedControl<HubSectionTab>
-                    options={[
-                        { key: 'summary', label: 'Summary' },
-                        { key: 'words', label: 'Words', badgeCount: words.length },
-                        { key: 'quiz', label: 'Quiz' },
-                        { key: 'ask', label: 'Ask' },
-                    ]}
-                    selectedKey={activeSection}
-                    onSelect={setActiveSection}
-                />
             </View>
 
-            {/* Tab Contents */}
+            {/* Main Panel Content by Active Section */}
             <View style={{ flex: 1 }}>
-                {/* ── Summary Panel ── */}
+                {/* ── 1. SUMMARY PANEL ── */}
                 {activeSection === 'summary' && (
-                    <ScrollView style={styles.panelContent} contentContainerStyle={{ paddingBottom: 90 }}>
-                        <View style={styles.summaryControlsRow}>
-                            <View style={styles.lengthPills}>
+                    <ScrollView
+                        style={styles.panelScroll}
+                        contentContainerStyle={styles.panelContent}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        {/* Summary Toolbar (Length toggle & Audio Player) */}
+                        <View style={styles.summaryToolbar}>
+                            <View style={styles.lengthToggleContainer}>
                                 {(['brief', 'standard', 'detailed'] as SummaryLength[]).map((len) => (
                                     <TouchableOpacity
                                         key={len}
                                         style={[
-                                            styles.lengthPill,
-                                            summaryLength === len && styles.lengthPillActive,
+                                            styles.lenPill,
+                                            summaryLength === len && { backgroundColor: tabAccent },
                                         ]}
-                                        onPress={() => setSummaryLength(len)}
+                                        onPress={() => {
+                                            triggerHaptic('selection');
+                                            setSummaryLength(len);
+                                        }}
                                     >
                                         <Text
                                             style={[
-                                                styles.lengthPillText,
-                                                summaryLength === len && { color: colors.accent, fontWeight: '600' },
+                                                styles.lenPillText,
+                                                { color: summaryLength === len ? '#FFFFFF' : colors.textMuted },
                                             ]}
                                         >
                                             {len.charAt(0).toUpperCase() + len.slice(1)}
@@ -699,547 +762,709 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                                 ))}
                             </View>
 
-                            <TouchableOpacity
-                                style={styles.listenBtn}
-                                onPress={() => {
-                                    if (summaryData?.overview) {
-                                        ttsService.speak(summaryData.overview);
-                                    }
-                                }}
-                            >
-                                <Volume2 size={16} color={colors.accent} strokeWidth={1.5} />
-                                <Text style={[styles.listenText, { color: colors.accent }]}>Listen</Text>
-                            </TouchableOpacity>
+                            <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+                                <AnimatedPressable
+                                    style={[styles.audioRateBtn, { backgroundColor: colors.surfaceRaised }]}
+                                    onPress={handleCycleAudioRate}
+                                >
+                                    <Text style={[styles.audioRateText, { color: colors.textSecondary }]}>
+                                        {speechRate}x
+                                    </Text>
+                                </AnimatedPressable>
+
+                                <AnimatedPressable
+                                    style={[
+                                        styles.audioPlayBtn,
+                                        { backgroundColor: isPlayingAudio ? colors.secondary : tabAccent },
+                                        shadows.glowAccent,
+                                    ]}
+                                    onPress={handleToggleAudio}
+                                >
+                                    {isPlayingAudio ? (
+                                        <VolumeX size={16} color="#FFFFFF" strokeWidth={2} />
+                                    ) : (
+                                        <Volume2 size={16} color="#FFFFFF" strokeWidth={2} />
+                                    )}
+                                    <Text style={styles.audioBtnText}>
+                                        {isPlayingAudio ? 'Pause' : 'Listen'}
+                                    </Text>
+                                </AnimatedPressable>
+                            </View>
                         </View>
 
                         {summaryLoading ? (
-                            <ParagraphSkeleton />
-                        ) : summaryData ? (
-                            <View>
-                                <View style={styles.overviewBox}>
-                                    <Text style={styles.overviewText}>
+                            <View style={{ paddingVertical: 16 }}>
+                                <CardSkeleton />
+                                <ParagraphSkeleton lines={4} />
+                            </View>
+                        ) : !summaryData ? (
+                            <EmptyState
+                                icon={BookOpen}
+                                title="No summary generated"
+                                description="Select a document to generate structured summaries."
+                            />
+                        ) : (
+                            <>
+                                {/* Overview Card */}
+                                <View style={[styles.overviewCard, shadows.card]}>
+                                    <View style={styles.overviewHeader}>
+                                        <Sparkles size={18} color={tabAccent} strokeWidth={2} style={{ marginRight: 8 }} />
+                                        <Text style={styles.overviewTitle}>Executive Overview</Text>
+                                    </View>
+                                    <Text style={[styles.overviewReadingText, { fontFamily: typography.fontFamily.reading }]}>
                                         {summaryData.overview}
                                     </Text>
                                 </View>
 
-                                <Text style={styles.sectionHeader}>Key Takeaways</Text>
-                                <View style={styles.keyPointsContainer}>
-                                    {summaryData.keyPoints.map((pt, idx) => (
-                                        <View key={idx} style={styles.keyPointRow}>
-                                            <View style={styles.bulletDot} />
-                                            <Text style={styles.keyPointText}>{pt}</Text>
+                                {/* Key Points Breakdown */}
+                                <Text style={styles.sectionHeaderTitle}>Key Concepts</Text>
+                                {summaryData.keyPoints.map((pt, idx) => (
+                                    <View key={idx} style={[styles.keyPointRow, shadows.subtle]}>
+                                        <View style={[styles.pointBadge, { backgroundColor: tabAccent }]}>
+                                            <Text style={styles.pointBadgeNum}>{idx + 1}</Text>
                                         </View>
-                                    ))}
-                                </View>
+                                        <Text style={[styles.keyPointText, { fontFamily: typography.fontFamily.reading }]}>
+                                            {pt}
+                                        </Text>
+                                    </View>
+                                ))}
 
-                                <Text style={styles.sectionHeader}>Chapter Sections</Text>
-                                {summaryData.sections.map((sec, sIdx) => {
-                                    const isOpen = expandedSections[sIdx];
-                                    return (
-                                        <View key={sIdx} style={[styles.collapsibleSection, shadows.card]}>
-                                            <TouchableOpacity
-                                                style={styles.sectionTitleRow}
-                                                onPress={() =>
-                                                    setExpandedSections((prev) => ({ ...prev, [sIdx]: !prev[sIdx] }))
-                                                }
-                                            >
-                                                <Text style={styles.sectionTitle}>{sec.title}</Text>
-                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                                    {sec.page && (
-                                                        <TouchableOpacity
-                                                            style={styles.pageChip}
-                                                            onPress={() => handleJumpToCitation(sec.page!, sec.content)}
-                                                        >
-                                                            <Text style={styles.pageChipText}>p. {sec.page}</Text>
-                                                        </TouchableOpacity>
-                                                    )}
-                                                    {isOpen ? (
-                                                        <ChevronUp size={16} color={colors.textMuted} />
-                                                    ) : (
-                                                        <ChevronDown size={16} color={colors.textMuted} />
+                                {/* Collapsible Sections */}
+                                {summaryLength !== 'brief' && (
+                                    <>
+                                        <Text style={[styles.sectionHeaderTitle, { marginTop: 18 }]}>Detailed Section Notes</Text>
+                                        {summaryData.sections.map((sec, sIdx) => {
+                                            const isExp = !!expandedSections[sIdx];
+                                            return (
+                                                <View key={sIdx} style={[styles.collapsibleSecCard, shadows.card]}>
+                                                    <TouchableOpacity
+                                                        style={styles.collapsibleSecHeader}
+                                                        onPress={() =>
+                                                            setExpandedSections((prev) => ({ ...prev, [sIdx]: !prev[sIdx] }))
+                                                        }
+                                                        activeOpacity={0.7}
+                                                    >
+                                                        <Text style={styles.secCardTitle} numberOfLines={1}>
+                                                            {sec.title}
+                                                        </Text>
+                                                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                                                            {sec.page && (
+                                                                <View style={[styles.pageChip, { backgroundColor: colors.surfaceRaised }]}>
+                                                                    <Text style={styles.pageChipText}>p. {sec.page}</Text>
+                                                                </View>
+                                                            )}
+                                                            {isExp ? (
+                                                                <ChevronUp size={18} color={colors.textMuted} />
+                                                            ) : (
+                                                                <ChevronDown size={18} color={colors.textMuted} />
+                                                            )}
+                                                        </View>
+                                                    </TouchableOpacity>
+
+                                                    {isExp && (
+                                                        <View style={styles.secBody}>
+                                                            <Text style={[styles.secContentText, { fontFamily: typography.fontFamily.reading }]}>
+                                                                {sec.content}
+                                                            </Text>
+                                                        </View>
                                                     )}
                                                 </View>
-                                            </TouchableOpacity>
-
-                                            {isOpen && (
-                                                <Text style={styles.sectionBody}>{sec.content}</Text>
-                                            )}
-                                        </View>
-                                    );
-                                })}
-                            </View>
-                        ) : null}
+                                            );
+                                        })}
+                                    </>
+                                )}
+                            </>
+                        )}
                     </ScrollView>
                 )}
 
-                {/* ── Words Panel ── */}
+                {/* ── 2. WORDS PANEL & 3D FLASHCARDS ── */}
                 {activeSection === 'words' && (
-                    <View style={{ flex: 1 }}>
-                        <View style={styles.wordsToolbar}>
+                    <View style={{ flex: 1, paddingHorizontal: 16 }}>
+                        {/* Word Search & Controls */}
+                        <View style={styles.wordsControlsRow}>
                             <View style={styles.wordSearchBox}>
-                                <Search size={14} color={colors.textMuted} style={{ marginRight: 6 }} />
+                                <Search size={15} color={colors.textMuted} strokeWidth={2} style={{ marginRight: 6 }} />
                                 <TextInput
                                     style={styles.wordSearchInput}
-                                    placeholder="Search terms..."
+                                    placeholder="Search terms or meanings..."
                                     placeholderTextColor={colors.textMuted}
                                     value={wordSearch}
                                     onChangeText={setWordSearch}
                                 />
                             </View>
 
-                            <TouchableOpacity
-                                style={styles.studyDeckBtn}
+                            <AnimatedPressable
+                                style={[styles.studyModeBtn, { backgroundColor: tabAccent }, shadows.glowAccent]}
                                 onPress={() => {
+                                    triggerHaptic('selection');
+                                    setIsFlashcardOpen(true);
                                     setFlashcardIndex(0);
                                     setIsCardFlipped(false);
-                                    setIsFlashcardOpen(true);
                                 }}
                             >
-                                <BookMarked size={14} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 4 }} />
-                                <Text style={[styles.studyDeckText, { color: colors.accent }]}>Flashcards</Text>
-                            </TouchableOpacity>
-
-                            <TouchableOpacity style={styles.exportBtn} onPress={handleExportCSV}>
-                                <Share2 size={14} color={colors.textSecondary} strokeWidth={1.5} />
-                            </TouchableOpacity>
+                                <Sparkles size={14} color="#FFFFFF" strokeWidth={2} style={{ marginRight: 5 }} />
+                                <Text style={styles.studyModeBtnText}>Study Mode</Text>
+                            </AnimatedPressable>
                         </View>
 
-                        {/* Filter tabs: All · To learn · Known */}
-                        <View style={styles.wordsFilterTabs}>
+                        {/* Filter Tabs */}
+                        <View style={styles.wordFilterRow}>
                             {(['all', 'to_learn', 'known'] as WordFilter[]).map((f) => (
                                 <TouchableOpacity
                                     key={f}
                                     style={[
-                                        styles.filterTab,
-                                        wordFilter === f && styles.filterTabActive,
+                                        styles.filterPill,
+                                        wordFilter === f && { backgroundColor: tabAccent },
                                     ]}
-                                    onPress={() => setWordFilter(f)}
+                                    onPress={() => {
+                                        triggerHaptic('selection');
+                                        setWordFilter(f);
+                                    }}
                                 >
                                     <Text
                                         style={[
-                                            styles.filterTabText,
-                                            wordFilter === f && { color: colors.accent, fontWeight: '600' },
+                                            styles.filterPillText,
+                                            { color: wordFilter === f ? '#FFFFFF' : colors.textMuted },
                                         ]}
                                     >
-                                        {f === 'all' ? 'All' : f === 'to_learn' ? 'To learn' : 'Known'}
+                                        {f === 'all' ? 'All' : f === 'to_learn' ? 'To Learn' : 'Known'}
                                     </Text>
                                 </TouchableOpacity>
                             ))}
                         </View>
 
                         {wordsLoading ? (
-                            <View style={{ padding: 16 }}><CardSkeleton /></View>
+                            <View style={{ paddingVertical: 12 }}>
+                                <CardSkeleton />
+                                <CardSkeleton />
+                            </View>
+                        ) : filteredWords.length === 0 ? (
+                            <EmptyState
+                                icon={Sparkles}
+                                title="No vocabulary words"
+                                description="No terms found in this filter. Try adjusting your search query."
+                            />
                         ) : (
-                            <FlatList
-                                data={filteredWords}
-                                keyExtractor={(item) => item.id}
-                                contentContainerStyle={{ padding: 16, paddingBottom: 90 }}
-                                renderItem={({ item }) => (
-                                    <View style={[styles.wordCard, shadows.card]}>
-                                        <View style={styles.wordCardHeader}>
-                                            <View style={{ flexDirection: 'row', alignItems: 'baseline', gap: 6 }}>
-                                                <Text style={styles.wordTerm}>{item.term}</Text>
-                                                {item.part_of_speech && (
-                                                    <Text style={styles.wordPos}>{item.part_of_speech}</Text>
-                                                )}
+                            <ScrollView
+                                contentContainerStyle={{ paddingBottom: 110, paddingTop: 6 }}
+                                showsVerticalScrollIndicator={false}
+                            >
+                                {filteredWords.map((word) => (
+                                    <View
+                                        key={word.id}
+                                        style={[
+                                            styles.vocabCard,
+                                            shadows.card,
+                                            word.isKnown && { opacity: 0.65, backgroundColor: colors.surfaceRaised },
+                                        ]}
+                                    >
+                                        <View style={styles.vocabHeader}>
+                                            <View style={{ flex: 1, paddingRight: 8 }}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                                                    <Text style={styles.vocabTerm}>{word.term}</Text>
+                                                    {word.part_of_speech && (
+                                                        <View style={[styles.posBadge, { backgroundColor: colors.primaryMuted }]}>
+                                                            <Text style={[styles.posText, { color: colors.primary }]}>
+                                                                {word.part_of_speech}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                                <Text style={styles.vocabDefinition}>{word.definition}</Text>
                                             </View>
 
-                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-                                                {item.page && (
-                                                    <TouchableOpacity
-                                                        style={styles.pageChip}
-                                                        onPress={() => handleJumpToCitation(item.page!, item.sentence || item.definition)}
-                                                    >
-                                                        <Text style={styles.pageChipText}>p. {item.page}</Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                                <TouchableOpacity
-                                                    style={[
-                                                        styles.knownToggleBtn,
-                                                        item.isKnown && { backgroundColor: colors.successMuted },
-                                                    ]}
-                                                    onPress={() => toggleWordKnown(item.id)}
-                                                >
-                                                    <Check
-                                                        size={14}
-                                                        color={item.isKnown ? colors.success : colors.textMuted}
-                                                        strokeWidth={item.isKnown ? 2.5 : 1.5}
-                                                    />
-                                                </TouchableOpacity>
-                                            </View>
+                                            <AnimatedPressable
+                                                style={[
+                                                    styles.knownCheckBtn,
+                                                    word.isKnown && { backgroundColor: colors.success, borderColor: colors.success },
+                                                ]}
+                                                onPress={() => handleToggleKnown(word.id)}
+                                                accessibilityLabel="Mark as known"
+                                            >
+                                                <Check size={16} color={word.isKnown ? '#FFFFFF' : colors.textMuted} strokeWidth={2.5} />
+                                            </AnimatedPressable>
                                         </View>
 
-                                        <Text style={styles.wordDefinition}>{item.definition}</Text>
-
-                                        {item.sentence ? (
-                                            <View style={styles.wordSentenceBox}>
-                                                <Text style={styles.wordSentenceText}>
-                                                    "{item.sentence}"
+                                        {/* Sentence context with highlighted term */}
+                                        {word.sentence && (
+                                            <View style={[styles.vocabSentenceBox, { backgroundColor: colors.surfaceRaised }]}>
+                                                <Text style={[styles.vocabSentenceText, { fontFamily: typography.fontFamily.reading }]}>
+                                                    "{word.sentence}"
                                                 </Text>
                                             </View>
-                                        ) : null}
+                                        )}
+
+                                        <View style={styles.vocabFooter}>
+                                            {word.page && (
+                                                <View style={[styles.pageChip, { backgroundColor: colors.surfaceRaised }]}>
+                                                    <Text style={styles.pageChipText}>Page {word.page}</Text>
+                                                </View>
+                                            )}
+                                            <Text style={[styles.knownStatusText, { color: word.isKnown ? colors.success : colors.textMuted }]}>
+                                                {word.isKnown ? 'Mastered' : 'Needs Review'}
+                                            </Text>
+                                        </View>
                                     </View>
-                                )}
-                            />
+                                ))}
+                            </ScrollView>
                         )}
                     </View>
                 )}
 
-                {/* ── Quiz Panel ── */}
+                {/* ── 3. QUIZ PANEL ── */}
                 {activeSection === 'quiz' && (
-                    <View style={{ flex: 1, padding: 16 }}>
+                    <View style={{ flex: 1, paddingHorizontal: 16 }}>
                         {!isQuizActive ? (
-                            <ScrollView contentContainerStyle={{ paddingBottom: 90 }}>
-                                <Text style={styles.quizSetupTitle}>Practice Quiz</Text>
-                                <Text style={styles.quizSetupSubtitle}>
-                                    Low-stakes active recall practice tied directly to what you are studying.
-                                </Text>
+                            <ScrollView
+                                contentContainerStyle={{ paddingBottom: 110, paddingTop: 12 }}
+                                showsVerticalScrollIndicator={false}
+                            >
+                                <View style={[styles.quizSetupCard, shadows.card]}>
+                                    <View style={styles.quizSetupHeader}>
+                                        <Lightbulb size={24} color={tabAccent} strokeWidth={2} style={{ marginRight: 10 }} />
+                                        <View>
+                                            <Text style={styles.quizSetupTitle}>Instant Quiz Practice</Text>
+                                            <Text style={styles.quizSetupSub}>Generate multi-choice questions from your notes</Text>
+                                        </View>
+                                    </View>
 
-                                <Text style={styles.quizFieldLabel}>Source Scope</Text>
-                                <View style={styles.quizSourceRow}>
-                                    {[
-                                        { key: 'doc', label: 'This PDF' },
-                                        { key: 'subject', label: 'This Subject' },
-                                        { key: 'course', label: 'Whole Course' },
-                                    ].map((s) => (
-                                        <TouchableOpacity
-                                            key={s.key}
-                                            style={[
-                                                styles.sourceOption,
-                                                quizSource === s.key && styles.sourceOptionActive,
-                                            ]}
-                                            onPress={() => setQuizSource(s.key as any)}
-                                        >
-                                            <Text
+                                    <Text style={styles.fieldLabel}>Question Source</Text>
+                                    <View style={styles.pickerRow}>
+                                        {[
+                                            { key: 'doc', label: 'Current PDF' },
+                                            { key: 'subject', label: 'Whole Subject' },
+                                            { key: 'course', label: 'Entire Course' },
+                                        ].map((src) => (
+                                            <TouchableOpacity
+                                                key={src.key}
                                                 style={[
-                                                    styles.sourceOptionText,
-                                                    quizSource === s.key && { color: colors.accent, fontWeight: '600' },
+                                                    styles.quizPickerPill,
+                                                    quizSource === src.key && { backgroundColor: tabAccent, borderColor: tabAccent },
                                                 ]}
+                                                onPress={() => setQuizSource(src.key as any)}
                                             >
-                                                {s.label}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
+                                                <Text
+                                                    style={[
+                                                        styles.quizPickerPillText,
+                                                        { color: quizSource === src.key ? '#FFFFFF' : colors.text },
+                                                    ]}
+                                                >
+                                                    {src.label}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
 
-                                <Text style={styles.quizFieldLabel}>Question Count</Text>
-                                <View style={styles.quizSourceRow}>
-                                    {[5, 10, 15].map((cnt) => (
-                                        <TouchableOpacity
-                                            key={cnt}
-                                            style={[
-                                                styles.sourceOption,
-                                                quizCount === cnt && styles.sourceOptionActive,
-                                            ]}
-                                            onPress={() => setQuizCount(cnt)}
-                                        >
-                                            <Text
+                                    <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Difficulty</Text>
+                                    <View style={styles.pickerRow}>
+                                        {(['Easy', 'Medium', 'Hard'] as const).map((diff) => (
+                                            <TouchableOpacity
+                                                key={diff}
                                                 style={[
-                                                    styles.sourceOptionText,
-                                                    quizCount === cnt && { color: colors.accent, fontWeight: '600' },
+                                                    styles.quizPickerPill,
+                                                    quizDifficulty === diff && { backgroundColor: tabAccent, borderColor: tabAccent },
                                                 ]}
+                                                onPress={() => setQuizDifficulty(diff)}
                                             >
-                                                {cnt} Questions
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
+                                                <Text
+                                                    style={[
+                                                        styles.quizPickerPillText,
+                                                        { color: quizDifficulty === diff ? '#FFFFFF' : colors.text },
+                                                    ]}
+                                                >
+                                                    {diff}
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
 
-                                <Text style={styles.quizFieldLabel}>Difficulty</Text>
-                                <View style={styles.quizSourceRow}>
-                                    {['Easy', 'Medium', 'Hard'].map((diff) => (
-                                        <TouchableOpacity
-                                            key={diff}
-                                            style={[
-                                                styles.sourceOption,
-                                                quizDifficulty === diff && styles.sourceOptionActive,
-                                            ]}
-                                            onPress={() => setQuizDifficulty(diff as any)}
-                                        >
-                                            <Text
+                                    <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Question Count</Text>
+                                    <View style={styles.pickerRow}>
+                                        {[3, 5, 10].map((cnt) => (
+                                            <TouchableOpacity
+                                                key={cnt}
                                                 style={[
-                                                    styles.sourceOptionText,
-                                                    quizDifficulty === diff && { color: colors.accent, fontWeight: '600' },
+                                                    styles.quizPickerPill,
+                                                    quizCount === cnt && { backgroundColor: tabAccent, borderColor: tabAccent },
                                                 ]}
+                                                onPress={() => setQuizCount(cnt)}
                                             >
-                                                {diff}
-                                            </Text>
-                                        </TouchableOpacity>
-                                    ))}
-                                </View>
+                                                <Text
+                                                    style={[
+                                                        styles.quizPickerPillText,
+                                                        { color: quizCount === cnt ? '#FFFFFF' : colors.text },
+                                                    ]}
+                                                >
+                                                    {cnt} Questions
+                                                </Text>
+                                            </TouchableOpacity>
+                                        ))}
+                                    </View>
 
-                                <TouchableOpacity
-                                    style={[styles.startQuizBtn, { backgroundColor: colors.accent }]}
-                                    onPress={handleStartPracticeQuiz}
-                                    activeOpacity={0.85}
-                                >
-                                    <Text style={[styles.startQuizText, { color: colors.textInverse }]}>
-                                        Generate & Start Practice
-                                    </Text>
-                                </TouchableOpacity>
+                                    <GradientButton
+                                        colors={gradients.tealToBlue[isDark ? 'dark' : 'light']}
+                                        title="Start Quiz Practice"
+                                        onPress={handleStartQuiz}
+                                        style={{ marginTop: 20 }}
+                                    />
+                                </View>
                             </ScrollView>
                         ) : quizLoading ? (
                             <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-                                <ActivityIndicator size="large" color={colors.accent} />
-                                <Text style={{ marginTop: 12, color: colors.textMuted, fontSize: typography.sizes.sm }}>
-                                    Synthesizing practice quiz grounded in {selectedSubject.name}...
+                                <ActivityIndicator size="large" color={tabAccent} />
+                                <Text style={[styles.loadingQuizText, { color: colors.textMuted }]}>
+                                    Synthesizing high-yield questions...
                                 </Text>
                             </View>
                         ) : quizCompleted ? (
-                            <ScrollView contentContainerStyle={{ paddingBottom: 90 }}>
+                            <ScrollView
+                                contentContainerStyle={{ paddingBottom: 110, paddingTop: 20, alignItems: 'center' }}
+                                showsVerticalScrollIndicator={false}
+                            >
                                 <View style={[styles.quizResultsCard, shadows.card]}>
-                                    <Text style={styles.resultsHeader}>Practice Completed</Text>
-                                    <Text style={styles.resultsScoreBig}>{quizScore.percentage}%</Text>
-                                    <Text style={styles.resultsScoreDetail}>
-                                        {quizScore.correct} correct out of {quizScore.total} questions
+                                    <Text style={styles.resultsHeading}>Quiz Completed!</Text>
+                                    <View style={{ marginVertical: 20 }}>
+                                        <ProgressRing
+                                            percentage={quizScorePercentage}
+                                            size={100}
+                                            strokeWidth={8}
+                                            showLabel={true}
+                                            gradientColors={gradients.tealToBlue[isDark ? 'dark' : 'light']}
+                                        />
+                                    </View>
+                                    <Text style={styles.resultsScoreSummary}>
+                                        You got {quizScoreCount} out of {quizQuestions.length} correct ({quizScorePercentage}%)
                                     </Text>
-                                </View>
 
-                                {missedQuestions.length > 0 ? (
-                                    <View>
-                                        <Text style={styles.sectionHeader}>Review Missed Questions</Text>
-                                        {missedQuestions.map((q) => (
-                                            <View key={q.id} style={[styles.missedCard, shadows.card]}>
-                                                <Text style={styles.missedQText}>{q.question}</Text>
-                                                <Text style={styles.missedAnswerCorrect}>
-                                                    Correct: {q.correct_answer}
-                                                </Text>
-                                                <Text style={styles.missedExplanation}>{q.explanation}</Text>
-                                                {q.page && (
-                                                    <TouchableOpacity
-                                                        style={[styles.pageChip, { alignSelf: 'flex-start', marginTop: 8 }]}
-                                                        onPress={() => handleJumpToCitation(q.page!, q.explanation)}
-                                                    >
-                                                        <Text style={styles.pageChipText}>Source p. {q.page}</Text>
-                                                    </TouchableOpacity>
-                                                )}
-                                            </View>
-                                        ))}
-
-                                        <TouchableOpacity
-                                            style={[styles.startQuizBtn, { backgroundColor: colors.accent, marginTop: 12 }]}
-                                            onPress={() => {
-                                                setQuizQuestions(missedQuestions);
-                                                setSelectedQuizAnswers({});
-                                                setCurrentQuizIndex(0);
-                                                setQuizCompleted(false);
-                                            }}
+                                    <View style={{ flexDirection: 'row', gap: 10, marginTop: 20, width: '100%' }}>
+                                        <AnimatedPressable
+                                            style={[styles.quizActionBtn, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}
+                                            onPress={() => setIsQuizActive(false)}
                                         >
-                                            <RotateCcw size={16} color={colors.textInverse} style={{ marginRight: 6 }} />
-                                            <Text style={[styles.startQuizText, { color: colors.textInverse }]}>Retry Missed</Text>
-                                        </TouchableOpacity>
-                                    </View>
-                                ) : (
-                                    <View style={{ alignItems: 'center', paddingVertical: 20 }}>
-                                        <CheckCircle2 size={40} color={colors.success} />
-                                        <Text style={{ marginTop: 8, color: colors.text, fontWeight: '600' }}>
-                                            Flawless score! All concepts mastered.
-                                        </Text>
-                                    </View>
-                                )}
+                                            <Text style={[styles.quizActionText, { color: colors.text }]}>Exit</Text>
+                                        </AnimatedPressable>
 
-                                <TouchableOpacity
-                                    style={styles.donePracticeBtn}
-                                    onPress={() => setIsQuizActive(false)}
-                                >
-                                    <Text style={styles.donePracticeText}>Back to Quiz Options</Text>
-                                </TouchableOpacity>
+                                        <AnimatedPressable
+                                            style={[styles.quizActionBtn, { backgroundColor: tabAccent, flex: 1 }, shadows.glowAccent]}
+                                            onPress={handleStartQuiz}
+                                        >
+                                            <RotateCcw size={15} color="#FFFFFF" strokeWidth={2} style={{ marginRight: 6 }} />
+                                            <Text style={[styles.quizActionText, { color: '#FFFFFF' }]}>Retry Quiz</Text>
+                                        </AnimatedPressable>
+                                    </View>
+                                </View>
                             </ScrollView>
                         ) : (
-                            <View style={{ flex: 1 }}>
-                                {/* Active Question View with Progress */}
-                                <View style={styles.quizProgressBarContainer}>
-                                    <View
-                                        style={[
-                                            styles.quizProgressBar,
-                                            {
-                                                width: `${((currentQuizIndex + 1) / quizQuestions.length) * 100}%`,
-                                                backgroundColor: colors.accent,
-                                            },
-                                        ]}
-                                    />
-                                </View>
-
-                                <Text style={styles.quizProgressText}>
-                                    Question {currentQuizIndex + 1} of {quizQuestions.length}
-                                </Text>
-
+                            <ScrollView
+                                contentContainerStyle={{ paddingBottom: 110, paddingTop: 10 }}
+                                showsVerticalScrollIndicator={false}
+                            >
                                 {quizQuestions[currentQuizIndex] && (
-                                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
-                                        <Text style={styles.activeQuestionText}>
-                                            {quizQuestions[currentQuizIndex].question}
-                                        </Text>
+                                    <View>
+                                        {/* Question Progress Bar */}
+                                        <View style={styles.quizProgressBarContainer}>
+                                            <View style={styles.quizProgressHeader}>
+                                                <Text style={styles.questionCounterText}>
+                                                    Question {currentQuizIndex + 1} of {quizQuestions.length}
+                                                </Text>
+                                                <Text style={styles.quizTopicBadge}>
+                                                    {quizQuestions[currentQuizIndex].topic || selectedSubject.name}
+                                                </Text>
+                                            </View>
+                                            <View style={[styles.quizProgressTrack, { backgroundColor: colors.surfaceRaised }]}>
+                                                <View
+                                                    style={[
+                                                        styles.quizProgressFill,
+                                                        {
+                                                            backgroundColor: tabAccent,
+                                                            width: `${((currentQuizIndex + 1) / quizQuestions.length) * 100}%`,
+                                                        },
+                                                    ]}
+                                                />
+                                            </View>
+                                        </View>
 
-                                        <View style={styles.quizOptionsList}>
+                                        {/* Question Card with Shake animation on wrong answer */}
+                                        <Animated.View
+                                            style={[
+                                                styles.questionBox,
+                                                shadows.card,
+                                                { transform: [{ translateX: shakeAnim }] },
+                                            ]}
+                                        >
+                                            <Text style={[styles.questionText, { fontFamily: typography.fontFamily.reading }]}>
+                                                {quizQuestions[currentQuizIndex].question}
+                                            </Text>
+                                        </Animated.View>
+
+                                        {/* Option Cards */}
+                                        <View style={{ gap: 10, marginVertical: 14 }}>
                                             {quizQuestions[currentQuizIndex].options.map((opt, oIdx) => {
-                                                const currentQ = quizQuestions[currentQuizIndex];
-                                                const chosen = selectedQuizAnswers[currentQ.id];
-                                                const isSelected = chosen === opt;
-                                                const isCorrect = opt === currentQ.correct_answer;
-                                                const showFeedback = !!chosen;
+                                                const isSelected = selectedQuizAnswers[currentQuizIndex] === opt;
+                                                const hasAnswered = selectedQuizAnswers[currentQuizIndex] !== undefined;
+                                                const isCorrect = opt === quizQuestions[currentQuizIndex].correct_answer;
 
-                                                let optionStyle = styles.quizOptionRow;
-                                                if (showFeedback) {
-                                                    if (isCorrect) optionStyle = { ...optionStyle, ...styles.quizOptionCorrect };
-                                                    else if (isSelected) optionStyle = { ...optionStyle, ...styles.quizOptionIncorrect };
+                                                let optBg = colors.surface;
+                                                let optBorder = colors.border;
+                                                let optTextColor = colors.text;
+
+                                                if (hasAnswered) {
+                                                    if (isCorrect) {
+                                                        optBg = colors.successMuted;
+                                                        optBorder = colors.success;
+                                                        optTextColor = colors.success;
+                                                    } else if (isSelected) {
+                                                        optBg = colors.dangerMuted;
+                                                        optBorder = colors.danger;
+                                                        optTextColor = colors.danger;
+                                                    }
                                                 }
 
                                                 return (
-                                                    <TouchableOpacity
+                                                    <AnimatedPressable
                                                         key={oIdx}
-                                                        style={optionStyle}
+                                                        style={[
+                                                            styles.quizOptionCard,
+                                                            { backgroundColor: optBg, borderColor: optBorder },
+                                                            shadows.subtle,
+                                                        ]}
                                                         onPress={() => handleSelectQuizAnswer(opt)}
-                                                        disabled={!!chosen}
-                                                        activeOpacity={0.7}
                                                     >
-                                                        <Text style={styles.quizOptionText}>{opt}</Text>
-                                                        {showFeedback && isCorrect && (
-                                                            <CheckCircle2 size={18} color={colors.success} />
+                                                        <View style={[styles.optionAlphaCircle, { borderColor: optBorder }]}>
+                                                            <Text style={[styles.optionAlphaText, { color: optTextColor }]}>
+                                                                {String.fromCharCode(65 + oIdx)}
+                                                            </Text>
+                                                        </View>
+                                                        <Text style={[styles.quizOptionText, { color: optTextColor }]} numberOfLines={3}>
+                                                            {opt}
+                                                        </Text>
+                                                        {hasAnswered && isCorrect && (
+                                                            <CheckCircle2 size={20} color={colors.success} strokeWidth={2} />
                                                         )}
-                                                        {showFeedback && isSelected && !isCorrect && (
-                                                            <XCircle size={18} color={colors.danger} />
+                                                        {hasAnswered && isSelected && !isCorrect && (
+                                                            <XCircle size={20} color={colors.danger} strokeWidth={2} />
                                                         )}
-                                                    </TouchableOpacity>
+                                                    </AnimatedPressable>
                                                 );
                                             })}
                                         </View>
 
-                                        {/* Instant Feedback Explanation & Citation Jump */}
-                                        {selectedQuizAnswers[quizQuestions[currentQuizIndex].id] && (
-                                            <View style={[styles.instantFeedbackBox, shadows.card]}>
-                                                <Text style={styles.feedbackTitle}>Explanation</Text>
-                                                <Text style={styles.feedbackExplanation}>
+                                        {/* Explanation Box (Revealed after answering) */}
+                                        {selectedQuizAnswers[currentQuizIndex] !== undefined && (
+                                            <View style={[styles.explanationCard, shadows.card]}>
+                                                <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
+                                                    <Lightbulb size={16} color={tabAccent} strokeWidth={2} style={{ marginRight: 6 }} />
+                                                    <Text style={styles.explanationTitle}>Explanation</Text>
+                                                    {quizQuestions[currentQuizIndex].page && (
+                                                        <View style={[styles.pageChip, { backgroundColor: colors.surface, marginLeft: 'auto' }]}>
+                                                            <Text style={styles.pageChipText}>
+                                                                Page {quizQuestions[currentQuizIndex].page}
+                                                            </Text>
+                                                        </View>
+                                                    )}
+                                                </View>
+                                                <Text style={[styles.explanationText, { fontFamily: typography.fontFamily.reading }]}>
                                                     {quizQuestions[currentQuizIndex].explanation}
                                                 </Text>
-                                                {quizQuestions[currentQuizIndex].page && (
-                                                    <TouchableOpacity
-                                                        style={[styles.pageChip, { alignSelf: 'flex-start', marginTop: 8 }]}
-                                                        onPress={() =>
-                                                            handleJumpToCitation(
-                                                                quizQuestions[currentQuizIndex].page!,
-                                                                quizQuestions[currentQuizIndex].explanation
-                                                            )
-                                                        }
-                                                    >
-                                                        <Text style={styles.pageChipText}>
-                                                            Source p. {quizQuestions[currentQuizIndex].page}
-                                                        </Text>
-                                                    </TouchableOpacity>
-                                                )}
+
+                                                <AnimatedPressable
+                                                    style={[styles.nextQuizBtn, { backgroundColor: tabAccent }, shadows.glowAccent]}
+                                                    onPress={handleNextQuizQuestion}
+                                                >
+                                                    <Text style={styles.nextQuizBtnText}>
+                                                        {currentQuizIndex < quizQuestions.length - 1 ? 'Next Question' : 'View Results'}
+                                                    </Text>
+                                                    <ChevronRight size={16} color="#FFFFFF" strokeWidth={2.5} style={{ marginLeft: 4 }} />
+                                                </AnimatedPressable>
                                             </View>
                                         )}
-                                    </ScrollView>
+                                    </View>
                                 )}
-
-                                <View style={styles.quizNavRow}>
-                                    <TouchableOpacity
-                                        style={[
-                                            styles.quizNavBtn,
-                                            currentQuizIndex === 0 && { opacity: 0.3 },
-                                        ]}
-                                        disabled={currentQuizIndex === 0}
-                                        onPress={() => setCurrentQuizIndex((prev) => Math.max(0, prev - 1))}
-                                    >
-                                        <Text style={styles.quizNavBtnText}>Previous</Text>
-                                    </TouchableOpacity>
-
-                                    {currentQuizIndex < quizQuestions.length - 1 ? (
-                                        <TouchableOpacity
-                                            style={[styles.quizNavBtn, { backgroundColor: colors.accent }]}
-                                            onPress={() => setCurrentQuizIndex((prev) => prev + 1)}
-                                        >
-                                            <Text style={[styles.quizNavBtnText, { color: colors.textInverse }]}>Next</Text>
-                                        </TouchableOpacity>
-                                    ) : (
-                                        <TouchableOpacity
-                                            style={[styles.quizNavBtn, { backgroundColor: colors.accent }]}
-                                            onPress={() => setQuizCompleted(true)}
-                                        >
-                                            <Text style={[styles.quizNavBtnText, { color: colors.textInverse }]}>Finish</Text>
-                                        </TouchableOpacity>
-                                    )}
-                                </View>
-                            </View>
+                            </ScrollView>
                         )}
                     </View>
                 )}
 
-                {/* ── Ask / Scoped Chat Panel ── */}
+                {/* ── 4. ASK / SCOPED TUTOR PANEL ── */}
                 {activeSection === 'ask' && (
-                    <View style={{ flex: 1 }}>
-                        <View style={styles.scopedChatHeader}>
-                            <Text style={styles.scopedChatScopeLabel}>
-                                Answering from: {selectedCourse.title} › {selectedSubject.name}
-                            </Text>
-                        </View>
-
+                    <View style={{ flex: 1, paddingHorizontal: 16 }}>
                         <ScrollView
-                            style={{ flex: 1 }}
-                            contentContainerStyle={{ padding: 16, paddingBottom: 80 }}
+                            contentContainerStyle={{ paddingBottom: 110, paddingTop: 10 }}
                             showsVerticalScrollIndicator={false}
                         >
                             {messages.map((msg) => {
-                                const isAi = msg.sender === 'ai';
-
+                                const isUser = msg.sender === 'user';
                                 return (
-                                    <View key={msg.id} style={styles.messageItemWrapper}>
-                                        <Text style={isAi ? styles.aiMessageText : styles.userMessageText}>
-                                            {msg.text}
-                                        </Text>
+                                    <View
+                                        key={msg.id}
+                                        style={[
+                                            styles.chatMessageRow,
+                                            isUser ? styles.chatMessageUser : styles.chatMessageAi,
+                                        ]}
+                                    >
+                                        <View
+                                            style={[
+                                                styles.chatBubble,
+                                                isUser
+                                                    ? [styles.chatBubbleUser, { backgroundColor: tabAccent }]
+                                                    : [styles.chatBubbleAi, { backgroundColor: colors.surface }, shadows.card],
+                                            ]}
+                                        >
+                                            {msg.scopeLabel && (
+                                                <Text style={[styles.chatScopeBadge, { color: colors.textMuted }]}>
+                                                    {msg.scopeLabel}
+                                                </Text>
+                                            )}
+                                            <Text
+                                                style={[
+                                                    styles.chatMessageText,
+                                                    { color: isUser ? '#FFFFFF' : colors.text },
+                                                    !isUser && { fontFamily: typography.fontFamily.reading },
+                                                ]}
+                                            >
+                                                {msg.text}
+                                            </Text>
 
-                                        {msg.citations && msg.citations.length > 0 && (
-                                            <View style={styles.chatCitationsRow}>
-                                                {msg.citations.map((cit, cIdx) => (
-                                                    <TouchableOpacity
-                                                        key={cIdx}
-                                                        style={styles.pageChip}
-                                                        onPress={() => handleJumpToCitation(cit.page, cit.snippet)}
-                                                    >
-                                                        <Text style={styles.pageChipText}>p. {cit.page}</Text>
-                                                    </TouchableOpacity>
-                                                ))}
-                                            </View>
-                                        )}
+                                            {/* Citation Chips */}
+                                            {msg.citations && msg.citations.length > 0 && (
+                                                <View style={styles.citationChipsRow}>
+                                                    {msg.citations.map((c, cIdx) => (
+                                                        <AnimatedPressable
+                                                            key={cIdx}
+                                                            style={[styles.citationChip, { backgroundColor: colors.surfaceRaised }]}
+                                                            onPress={() => setSelectedCitationSnippet(c)}
+                                                        >
+                                                            <BookMarked size={12} color={tabAccent} strokeWidth={2} style={{ marginRight: 4 }} />
+                                                            <Text style={[styles.citationChipText, { color: tabAccent }]}>
+                                                                Page {c.page}
+                                                            </Text>
+                                                        </AnimatedPressable>
+                                                    ))}
+                                                </View>
+                                            )}
+                                        </View>
                                     </View>
                                 );
                             })}
                             {chatLoading && (
-                                <View style={{ paddingVertical: 12 }}>
-                                    <ActivityIndicator size="small" color={colors.accent} />
+                                <View style={[styles.chatBubbleAi, { backgroundColor: colors.surface, padding: 14 }]}>
+                                    <ActivityIndicator size="small" color={tabAccent} />
                                 </View>
                             )}
                         </ScrollView>
 
-                        {/* Composer Bar */}
-                        <View style={styles.composerBar}>
+                        {/* Chat Composer */}
+                        <View style={[styles.chatComposerBar, { backgroundColor: colors.surface, borderColor: colors.border }, shadows.card]}>
                             <TextInput
-                                style={styles.composerInput}
-                                placeholder={`Ask a question about ${selectedSubject.name}...`}
+                                style={[styles.chatTextInput, { color: colors.text }]}
+                                placeholder={`Ask question about ${selectedSubject.name}...`}
                                 placeholderTextColor={colors.textMuted}
                                 value={chatInput}
                                 onChangeText={setChatInput}
-                                onSubmitEditing={handleSendChatMessage}
+                                multiline
                             />
-                            <TouchableOpacity
-                                style={[
-                                    styles.sendBtn,
-                                    { backgroundColor: chatInput.trim() ? colors.accent : colors.surfaceRaised },
-                                ]}
+                            <AnimatedPressable
+                                style={[styles.chatSendBtn, { backgroundColor: chatInput.trim() ? tabAccent : colors.surfaceRaised }]}
+                                onPress={handleSendChat}
                                 disabled={!chatInput.trim() || chatLoading}
-                                onPress={handleSendChatMessage}
                             >
-                                <Send
-                                    size={16}
-                                    color={chatInput.trim() ? colors.textInverse : colors.textMuted}
-                                    strokeWidth={1.5}
-                                />
-                            </TouchableOpacity>
+                                <Send size={16} color={chatInput.trim() ? '#FFFFFF' : colors.textMuted} strokeWidth={2} />
+                            </AnimatedPressable>
                         </View>
                     </View>
                 )}
             </View>
 
-            {/* Document Picker Dropdown Modal */}
+            {/* ── 3D Flashcard Study Modal ── */}
+            <Modal
+                visible={isFlashcardOpen}
+                animationType="slide"
+                presentationStyle="pageSheet"
+                onRequestClose={() => setIsFlashcardOpen(false)}
+            >
+                <View style={styles.flashcardModalContainer}>
+                    <View style={styles.flashcardModalHeader}>
+                        <Text style={styles.flashcardModalTitle}>
+                            Flashcard {flashcardIndex + 1} of {filteredWords.length}
+                        </Text>
+                        <AnimatedPressable onPress={() => setIsFlashcardOpen(false)} style={styles.closeBtn}>
+                            <X size={20} color={colors.textMuted} strokeWidth={2} />
+                        </AnimatedPressable>
+                    </View>
+
+                    {filteredWords[flashcardIndex] && (
+                        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+                            <AnimatedPressable
+                                style={[styles.flashcard3DBox, shadows.modal]}
+                                onPress={handleFlipCard}
+                                scaleTo={0.98}
+                            >
+                                {!isCardFlipped ? (
+                                    <View style={styles.flashcardFace}>
+                                        <View style={[styles.cardTag, { backgroundColor: tabAccent }]}>
+                                            <Text style={styles.cardTagText}>TERM</Text>
+                                        </View>
+                                        <Text style={styles.flashcardTermText}>
+                                            {filteredWords[flashcardIndex].term}
+                                        </Text>
+                                        <Text style={[styles.tapToFlipNote, { color: colors.textMuted }]}>
+                                            Tap card to reveal definition
+                                        </Text>
+                                    </View>
+                                ) : (
+                                    <View style={styles.flashcardFace}>
+                                        <View style={[styles.cardTag, { backgroundColor: colors.secondary }]}>
+                                            <Text style={styles.cardTagText}>MEANING</Text>
+                                        </View>
+                                        <Text style={[styles.flashcardMeaningText, { fontFamily: typography.fontFamily.reading }]}>
+                                            {filteredWords[flashcardIndex].definition}
+                                        </Text>
+                                        {filteredWords[flashcardIndex].sentence && (
+                                            <View style={[styles.flashcardSentenceBox, { backgroundColor: colors.surfaceRaised }]}>
+                                                <Text style={[styles.flashcardSentenceText, { fontFamily: typography.fontFamily.reading }]}>
+                                                    "{filteredWords[flashcardIndex].sentence}"
+                                                </Text>
+                                            </View>
+                                        )}
+                                    </View>
+                                )}
+                            </AnimatedPressable>
+
+                            {/* Flashcard Navigation Controls */}
+                            <View style={styles.flashcardNavRow}>
+                                <AnimatedPressable
+                                    style={[styles.flashcardNavBtn, { backgroundColor: colors.surfaceRaised }]}
+                                    onPress={handlePrevFlashcard}
+                                    disabled={flashcardIndex === 0}
+                                >
+                                    <ArrowLeft size={18} color={colors.text} strokeWidth={2} />
+                                </AnimatedPressable>
+
+                                <AnimatedPressable
+                                    style={[styles.flashcardKnownBtn, { backgroundColor: colors.success }]}
+                                    onPress={() => {
+                                        handleToggleKnown(filteredWords[flashcardIndex].id);
+                                        handleNextFlashcard();
+                                    }}
+                                >
+                                    <Check size={18} color="#FFFFFF" strokeWidth={2.5} style={{ marginRight: 6 }} />
+                                    <Text style={styles.flashcardKnownBtnText}>Mark Mastered</Text>
+                                </AnimatedPressable>
+
+                                <AnimatedPressable
+                                    style={[styles.flashcardNavBtn, { backgroundColor: colors.surfaceRaised }]}
+                                    onPress={handleNextFlashcard}
+                                >
+                                    <ArrowRight size={18} color={colors.text} strokeWidth={2} />
+                                </AnimatedPressable>
+                            </View>
+                        </View>
+                    )}
+                </View>
+            </Modal>
+
+            {/* Document Picker Modal */}
             <Modal
                 visible={isDocPickerOpen}
                 transparent
@@ -1251,154 +1476,105 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                     activeOpacity={1}
                     onPress={() => setIsDocPickerOpen(false)}
                 >
-                    <View style={[styles.docPickerModalCard, shadows.modal]}>
-                        <Text style={styles.docPickerModalTitle}>
-                            Select Document in {selectedSubject.name}
-                        </Text>
-                        {selectedSubject.documents.length === 0 ? (
-                            <Text style={styles.emptyDocsNotice}>No documents uploaded for this subject yet.</Text>
-                        ) : (
-                            selectedSubject.documents.map((d) => (
-                                <TouchableOpacity
-                                    key={d.id}
+                    <View style={[styles.pickerModalCard, shadows.modal]}>
+                        <Text style={styles.pickerModalTitle}>Select Document</Text>
+                        <ScrollView style={{ maxHeight: 300 }}>
+                            {(selectedSubject.documents || []).map((doc) => (
+                                <AnimatedPressable
+                                    key={doc.id}
                                     style={[
                                         styles.docPickItem,
-                                        selectedDoc?.id === d.id && { backgroundColor: colors.surfaceRaised },
+                                        selectedDoc?.id === doc.id && { backgroundColor: colors.primaryMuted },
                                     ]}
-                                    onPress={() => handleSelectDoc(d)}
+                                    onPress={() => {
+                                        setSelectedDoc(doc);
+                                        loadDocumentMaterials(doc.id, selectedCourse.title, selectedSubject.name);
+                                        setIsDocPickerOpen(false);
+                                    }}
                                 >
-                                    <FileText size={16} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 8 }} />
-                                    <Text style={styles.docPickName} numberOfLines={1}>
-                                        {d.filename}
+                                    <FileText size={16} color={tabAccent} strokeWidth={2} style={{ marginRight: 8 }} />
+                                    <Text style={[styles.docPickItemText, { color: colors.text }]} numberOfLines={1}>
+                                        {doc.filename}
                                     </Text>
-                                    {selectedDoc?.id === d.id && (
-                                        <Check size={16} color={colors.accent} strokeWidth={2} />
-                                    )}
-                                </TouchableOpacity>
-                            ))
-                        )}
+                                </AnimatedPressable>
+                            ))}
+                        </ScrollView>
                     </View>
                 </TouchableOpacity>
             </Modal>
 
-            {/* Flashcard Study Mode Modal */}
-            <Modal
-                visible={isFlashcardOpen}
-                animationType="slide"
-                presentationStyle="pageSheet"
-                onRequestClose={() => setIsFlashcardOpen(false)}
-            >
-                <View style={styles.flashcardModalContainer}>
-                    <View style={styles.flashcardModalHeader}>
-                        <Text style={styles.flashcardModalTitle}>Flashcard Study Mode</Text>
-                        <TouchableOpacity onPress={() => setIsFlashcardOpen(false)}>
-                            <X size={20} color={colors.textMuted} />
-                        </TouchableOpacity>
-                    </View>
+            {/* Citation Grounding Inspection Modal */}
+            <CitationModal
+                visible={!!selectedCitationSnippet}
+                citationText={selectedCitationSnippet?.snippet || ''}
+                pageNumber={selectedCitationSnippet?.page}
+                documentTitle={selectedDoc?.filename || selectedSubject.name}
+                onClose={() => setSelectedCitationSnippet(null)}
+            />
 
-                    {words.length > 0 && (
-                        <View style={{ flex: 1, justifyContent: 'center' }}>
-                            <Text style={styles.cardCounter}>
-                                Card {flashcardIndex + 1} of {words.length}
-                            </Text>
-
-                            <TouchableOpacity
-                                style={[styles.flashcardLarge, shadows.card]}
-                                activeOpacity={0.9}
-                                onPress={() => setIsCardFlipped(!isCardFlipped)}
-                            >
-                                <Text style={styles.flashcardTapHint}>
-                                    {isCardFlipped ? 'Definition' : 'Term (Tap to flip)'}
-                                </Text>
-                                <Text style={styles.flashcardMainText}>
-                                    {isCardFlipped
-                                        ? words[flashcardIndex].definition
-                                        : words[flashcardIndex].term}
-                                </Text>
-                                {isCardFlipped && words[flashcardIndex].sentence && (
-                                    <Text style={styles.flashcardSentence}>
-                                        "{words[flashcardIndex].sentence}"
-                                    </Text>
-                                )}
-                            </TouchableOpacity>
-
-                            <View style={styles.flashcardActionsRow}>
-                                <TouchableOpacity
-                                    style={[styles.flashcardActionBtn, { borderColor: colors.warning }]}
-                                    onPress={() => {
-                                        setIsCardFlipped(false);
-                                        setFlashcardIndex((prev) => (prev + 1) % words.length);
-                                    }}
-                                >
-                                    <Text style={[styles.flashcardActionText, { color: colors.warning }]}>Review Again</Text>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                    style={[styles.flashcardActionBtn, { backgroundColor: colors.accent }]}
-                                    onPress={() => {
-                                        toggleWordKnown(words[flashcardIndex].id);
-                                        setIsCardFlipped(false);
-                                        setFlashcardIndex((prev) => (prev + 1) % words.length);
-                                    }}
-                                >
-                                    <Text style={[styles.flashcardActionText, { color: colors.textInverse }]}>Got It (Mark Known)</Text>
-                                </TouchableOpacity>
-                            </View>
-                        </View>
-                    )}
-                </View>
-            </Modal>
+            {/* Undo Toast */}
+            <Toast
+                visible={!!toastMessage}
+                message={toastMessage || ''}
+                actionLabel={lastKnownWordUndo ? 'Undo' : undefined}
+                onAction={lastKnownWordUndo ? handleUndoKnown : undefined}
+                onDismiss={() => setToastMessage(null)}
+            />
         </View>
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, shadows: any, tabAccent: string) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
         },
-        header: {
+        hubHeader: {
+            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingHorizontal: 16,
+            paddingBottom: 10,
             backgroundColor: colors.surface,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
-            paddingBottom: 8,
         },
-        courseTitleRow: {
+        hubTitleRow: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingHorizontal: 16,
-            marginBottom: 8,
         },
-        courseHeaderTitle: {
-            fontSize: 18,
-            fontWeight: '700',
+        courseEyebrow: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '600',
+            color: colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+        },
+        subjectMainTitle: {
+            fontSize: typography.sizes.xl,
+            fontWeight: '800',
             color: colors.text,
+            letterSpacing: -0.3,
+            marginTop: 2,
         },
-        docPickerTrigger: {
+        docPickerBtn: {
             flexDirection: 'row',
             alignItems: 'center',
-            marginTop: 3,
+            paddingVertical: 6,
+            paddingHorizontal: 10,
+            borderRadius: radii.controls,
+            maxWidth: 160,
         },
         docPickerText: {
             fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            maxWidth: 240,
-            marginRight: 4,
+            fontWeight: '600',
+            flex: 1,
         },
-        viewerToggleBtn: {
-            padding: 8,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surfaceRaised,
-        },
-        subjectChipsContainer: {
-            paddingHorizontal: 16,
-            gap: 6,
-            paddingVertical: 4,
+        subjectChipsScroll: {
+            flexDirection: 'row',
+            gap: 8,
+            paddingTop: 10,
+            paddingBottom: 2,
         },
         subjectChip: {
             flexDirection: 'row',
@@ -1407,11 +1583,8 @@ const createStyles = (colors: ThemeColors) =>
             paddingHorizontal: 12,
             borderRadius: radii.full,
             borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surface,
         },
-        subjectChipActive: {},
-        chipDot: {
+        subjectChipDot: {
             width: 6,
             height: 6,
             borderRadius: 3,
@@ -1419,203 +1592,170 @@ const createStyles = (colors: ThemeColors) =>
         },
         subjectChipText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '500',
-            color: colors.textSecondary,
-        },
-        pdfViewerContainer: {
-            height: 220,
-            backgroundColor: colors.surface,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.border,
-        },
-        pdfPageHeader: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            paddingHorizontal: 14,
-            paddingVertical: 6,
-            backgroundColor: colors.surfaceRaised,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.borderLight,
-        },
-        pdfPageIndicator: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            fontWeight: '500',
-        },
-        pdfPaperCanvas: {
-            flex: 1,
-            padding: 16,
-        },
-        pdfPaperHeading: {
-            fontSize: typography.sizes.md,
             fontWeight: '700',
-            color: '#1C1B18',
-            marginBottom: 2,
         },
-        pdfPaperMeta: {
-            fontSize: typography.sizes.xs,
-            color: '#6B675E',
-            marginBottom: 12,
-        },
-        pdfPaperBody: {
-            fontSize: 14,
-            lineHeight: 22,
-            color: '#1C1B18',
-            fontFamily: typography.fontFamily.serif,
-            marginBottom: 10,
-        },
-        citationHighlightBlock: {
-            padding: 8,
-            borderRadius: radii.xs,
-            marginBottom: 10,
-        },
-        citationHighlightText: {
-            fontSize: 13,
-            fontWeight: '600',
-        },
-        segmentedControlContainer: {
+        panelScroll: {
+            flex: 1,
             paddingHorizontal: 16,
-            paddingVertical: 8,
-            backgroundColor: colors.bg,
         },
         panelContent: {
-            flex: 1,
-            paddingHorizontal: 16,
+            paddingTop: 12,
+            paddingBottom: 110,
         },
-        summaryControlsRow: {
+        summaryToolbar: {
             flexDirection: 'row',
+            alignItems: 'center',
             justifyContent: 'space-between',
-            alignItems: 'center',
-            marginVertical: 10,
+            marginBottom: 14,
         },
-        lengthPills: {
+        lengthToggleContainer: {
             flexDirection: 'row',
-            gap: 6,
+            backgroundColor: colors.surfaceRaised,
+            borderRadius: radii.controls,
+            padding: 3,
         },
-        lengthPill: {
-            paddingVertical: 4,
+        lenPill: {
+            paddingVertical: 5,
             paddingHorizontal: 10,
             borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surface,
         },
-        lengthPillActive: {
-            borderColor: colors.accent,
-            backgroundColor: colors.accentMuted,
-        },
-        lengthPillText: {
+        lenPillText: {
             fontSize: typography.sizes.xs,
-            color: colors.textMuted,
+            fontWeight: '700',
         },
-        listenBtn: {
+        audioRateBtn: {
+            paddingVertical: 7,
+            paddingHorizontal: 10,
+            borderRadius: radii.controls,
+        },
+        audioRateText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+        },
+        audioPlayBtn: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 4,
-            paddingHorizontal: 10,
-            borderRadius: radii.sm,
-            backgroundColor: colors.accentMuted,
+            paddingVertical: 7,
+            paddingHorizontal: 12,
+            borderRadius: radii.controls,
         },
-        listenText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            marginLeft: 4,
+        audioBtnText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
+            marginLeft: 5,
         },
-        overviewBox: {
+        overviewCard: {
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 16,
             marginBottom: 16,
         },
-        overviewText: {
-            fontSize: 16,
-            lineHeight: 26,
-            color: colors.text,
-            fontFamily: typography.fontFamily.serif,
+        overviewHeader: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 8,
         },
-        sectionHeader: {
-            fontSize: typography.sizes.md,
+        overviewTitle: {
+            fontSize: typography.sizes.sm + 1,
             fontWeight: '700',
             color: colors.text,
-            marginBottom: 10,
-            marginTop: 6,
         },
-        keyPointsContainer: {
-            backgroundColor: colors.surface,
-            borderRadius: radii.md,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: 14,
-            marginBottom: 16,
-            gap: 10,
+        overviewReadingText: {
+            fontSize: typography.sizes.md,
+            lineHeight: 26,
+            color: colors.text,
+        },
+        sectionHeaderTitle: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '800',
+            color: colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 0.6,
+            marginBottom: 8,
         },
         keyPointRow: {
             flexDirection: 'row',
-            alignItems: 'flex-start',
-        },
-        bulletDot: {
-            width: 6,
-            height: 6,
-            borderRadius: 3,
-            backgroundColor: colors.accent,
-            marginTop: 7,
-            marginRight: 10,
-        },
-        keyPointText: {
-            fontSize: typography.sizes.sm,
-            color: colors.text,
-            lineHeight: 20,
-            flex: 1,
-        },
-        collapsibleSection: {
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.controls,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 14,
-            marginBottom: 10,
+            padding: 12,
+            marginBottom: 8,
+            alignItems: 'flex-start',
         },
-        sectionTitleRow: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
+        pointBadge: {
+            width: 22,
+            height: 22,
+            borderRadius: 11,
             alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 10,
+            marginTop: 2,
         },
-        sectionTitle: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
-            color: colors.text,
+        pointBadgeNum: {
+            color: '#FFFFFF',
+            fontSize: 10,
+            fontWeight: '800',
+        },
+        keyPointText: {
             flex: 1,
-        },
-        sectionBody: {
-            fontSize: typography.sizes.sm,
-            color: colors.textSecondary,
+            fontSize: typography.sizes.sm + 1,
             lineHeight: 22,
-            fontFamily: typography.fontFamily.serif,
-            marginTop: 10,
+            color: colors.text,
+        },
+        collapsibleSecCard: {
+            backgroundColor: colors.surface,
+            borderRadius: radii.cards,
+            borderWidth: 1,
+            borderColor: colors.border,
+            marginBottom: 10,
+            overflow: 'hidden',
+        },
+        collapsibleSecHeader: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: 14,
+        },
+        secCardTitle: {
+            flex: 1,
+            fontSize: typography.sizes.sm + 1,
+            fontWeight: '700',
+            color: colors.text,
+            paddingRight: 10,
+        },
+        secBody: {
+            paddingHorizontal: 14,
+            paddingBottom: 14,
             borderTopWidth: 1,
-            borderTopColor: colors.borderLight,
-            paddingTop: 8,
+            borderTopColor: colors.border,
+            paddingTop: 10,
+        },
+        secContentText: {
+            fontSize: typography.sizes.sm + 1,
+            lineHeight: 24,
+            color: colors.textSecondary,
         },
         pageChip: {
-            backgroundColor: colors.accentMuted,
-            paddingHorizontal: 6,
-            paddingVertical: 2,
-            borderRadius: radii.xs,
+            paddingVertical: 3,
+            paddingHorizontal: 8,
+            borderRadius: radii.full,
+            marginRight: 8,
         },
         pageChipText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            color: colors.accent,
+            fontSize: typography.sizes.xs - 1,
+            fontWeight: '700',
+            color: tabAccent,
         },
-        wordsToolbar: {
+        wordsControlsRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 16,
-            paddingVertical: 8,
-            gap: 8,
+            gap: 10,
+            paddingTop: 10,
+            marginBottom: 8,
         },
         wordSearchBox: {
             flex: 1,
@@ -1624,417 +1764,373 @@ const createStyles = (colors: ThemeColors) =>
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.border,
-            borderRadius: radii.sm,
+            borderRadius: radii.controls,
             paddingHorizontal: 10,
-            height: 36,
+            height: 40,
         },
         wordSearchInput: {
             flex: 1,
-            fontSize: typography.sizes.xs,
+            fontSize: typography.sizes.sm,
             color: colors.text,
+            paddingVertical: 0,
         },
-        studyDeckBtn: {
+        studyModeBtn: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 10,
-            height: 36,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.accentBorder,
-            backgroundColor: colors.accentMuted,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: radii.controls,
+            height: 40,
         },
-        studyDeckText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
+        studyModeBtnText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
         },
-        exportBtn: {
-            width: 36,
-            height: 36,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surface,
-            alignItems: 'center',
-            justifyContent: 'center',
-        },
-        wordsFilterTabs: {
+        wordFilterRow: {
             flexDirection: 'row',
-            paddingHorizontal: 16,
             gap: 8,
-            marginBottom: 6,
+            marginBottom: 8,
         },
-        filterTab: {
-            paddingVertical: 4,
+        filterPill: {
+            paddingVertical: 5,
             paddingHorizontal: 12,
             borderRadius: radii.full,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
+            backgroundColor: colors.surfaceRaised,
         },
-        filterTabActive: {
-            borderColor: colors.accent,
-            backgroundColor: colors.accentMuted,
-        },
-        filterTabText: {
+        filterPillText: {
             fontSize: typography.sizes.xs,
-            color: colors.textMuted,
+            fontWeight: '700',
         },
-        wordCard: {
+        vocabCard: {
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 14,
             marginBottom: 10,
         },
-        wordCardHeader: {
+        vocabHeader: {
             flexDirection: 'row',
+            alignItems: 'flex-start',
             justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 6,
         },
-        wordTerm: {
+        vocabTerm: {
             fontSize: typography.sizes.md,
-            fontWeight: '700',
+            fontWeight: '800',
             color: colors.text,
         },
-        wordPos: {
-            fontSize: typography.sizes.xs,
-            fontStyle: 'italic',
-            color: colors.textMuted,
+        posBadge: {
+            paddingVertical: 2,
+            paddingHorizontal: 6,
+            borderRadius: radii.xs,
         },
-        knownToggleBtn: {
-            width: 28,
-            height: 28,
-            borderRadius: 14,
-            borderWidth: 1,
+        posText: {
+            fontSize: 10,
+            fontWeight: '700',
+            textTransform: 'uppercase',
+        },
+        vocabDefinition: {
+            fontSize: typography.sizes.sm,
+            color: colors.textSecondary,
+            lineHeight: 20,
+            marginTop: 4,
+        },
+        knownCheckBtn: {
+            width: 32,
+            height: 32,
+            borderRadius: 16,
+            borderWidth: 1.5,
             borderColor: colors.border,
             alignItems: 'center',
             justifyContent: 'center',
         },
-        wordDefinition: {
-            fontSize: typography.sizes.sm,
-            color: colors.textSecondary,
+        vocabSentenceBox: {
+            padding: 10,
+            borderRadius: radii.controls,
+            marginTop: 10,
+        },
+        vocabSentenceText: {
+            fontSize: typography.sizes.xs + 1,
             lineHeight: 20,
-            marginBottom: 8,
-        },
-        wordSentenceBox: {
-            backgroundColor: colors.surfaceRaised,
-            padding: 8,
-            borderRadius: radii.xs,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.accent,
-        },
-        wordSentenceText: {
-            fontSize: typography.sizes.xs,
+            color: colors.text,
             fontStyle: 'italic',
-            color: colors.textSecondary,
-            fontFamily: typography.fontFamily.serif,
+        },
+        vocabFooter: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginTop: 10,
+        },
+        knownStatusText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+        },
+        quizSetupCard: {
+            backgroundColor: colors.surface,
+            borderRadius: radii.cards,
+            borderWidth: 1,
+            borderColor: colors.border,
+            padding: 18,
+        },
+        quizSetupHeader: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 16,
+            paddingBottom: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
         },
         quizSetupTitle: {
-            fontSize: typography.sizes.lg,
-            fontWeight: '700',
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
             color: colors.text,
-            marginBottom: 4,
         },
-        quizSetupSubtitle: {
-            fontSize: typography.sizes.sm,
+        quizSetupSub: {
+            fontSize: typography.sizes.xs,
             color: colors.textMuted,
-            lineHeight: 20,
-            marginBottom: 16,
+            marginTop: 2,
         },
-        quizFieldLabel: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
-            color: colors.text,
-            marginTop: 10,
-            marginBottom: 6,
+        fieldLabel: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+            color: colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            marginBottom: 8,
         },
-        quizSourceRow: {
+        pickerRow: {
             flexDirection: 'row',
             gap: 8,
-            marginBottom: 10,
+            marginBottom: 6,
         },
-        sourceOption: {
+        quizPickerPill: {
             flex: 1,
-            paddingVertical: 10,
-            borderRadius: radii.sm,
+            paddingVertical: 9,
+            borderRadius: radii.controls,
+            backgroundColor: colors.surfaceRaised,
             borderWidth: 1,
             borderColor: colors.border,
-            backgroundColor: colors.surface,
-            alignItems: 'center',
-        },
-        sourceOptionActive: {
-            borderColor: colors.accent,
-            backgroundColor: colors.accentMuted,
-        },
-        sourceOptionText: {
-            fontSize: typography.sizes.xs,
-            color: colors.textSecondary,
-            fontWeight: '500',
-        },
-        startQuizBtn: {
-            paddingVertical: 12,
-            borderRadius: radii.sm,
             alignItems: 'center',
             justifyContent: 'center',
-            marginTop: 18,
-            flexDirection: 'row',
         },
-        startQuizText: {
+        quizPickerPillText: {
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
+        },
+        loadingQuizText: {
+            marginTop: 12,
             fontSize: typography.sizes.sm,
             fontWeight: '600',
         },
         quizProgressBarContainer: {
-            height: 4,
-            backgroundColor: colors.border,
-            borderRadius: 2,
-            marginBottom: 10,
-            overflow: 'hidden',
+            marginBottom: 14,
         },
-        quizProgressBar: {
-            height: '100%',
-        },
-        quizProgressText: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            marginBottom: 12,
-        },
-        activeQuestionText: {
-            fontSize: typography.sizes.md,
-            fontWeight: '600',
-            color: colors.text,
-            lineHeight: 24,
-            fontFamily: typography.fontFamily.serif,
-            marginBottom: 16,
-        },
-        quizOptionsList: {
-            gap: 8,
-            marginBottom: 16,
-        },
-        quizOptionRow: {
+        quizProgressHeader: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            padding: 14,
-            borderRadius: radii.sm,
+            marginBottom: 6,
+        },
+        questionCounterText: {
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
+            color: colors.text,
+        },
+        quizTopicBadge: {
+            fontSize: typography.sizes.xs,
+            color: tabAccent,
+            fontWeight: '700',
+        },
+        quizProgressTrack: {
+            height: 6,
+            borderRadius: 3,
+            overflow: 'hidden',
+        },
+        quizProgressFill: {
+            height: '100%',
+            borderRadius: 3,
+        },
+        questionBox: {
+            backgroundColor: colors.surface,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
-            backgroundColor: colors.surface,
+            padding: 18,
         },
-        quizOptionCorrect: {
-            borderColor: colors.success,
-            backgroundColor: colors.successMuted,
+        questionText: {
+            fontSize: typography.sizes.md,
+            lineHeight: 26,
+            color: colors.text,
+            fontWeight: '600',
         },
-        quizOptionIncorrect: {
-            borderColor: colors.danger,
-            backgroundColor: colors.dangerMuted,
+        quizOptionCard: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            padding: 14,
+            borderRadius: radii.cards,
+            borderWidth: 1.5,
+            minHeight: 52,
+        },
+        optionAlphaCircle: {
+            width: 26,
+            height: 26,
+            borderRadius: 13,
+            borderWidth: 1.5,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginRight: 10,
+        },
+        optionAlphaText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
         },
         quizOptionText: {
-            fontSize: typography.sizes.sm,
-            color: colors.text,
             flex: 1,
-            paddingRight: 8,
-        },
-        instantFeedbackBox: {
-            backgroundColor: colors.surface,
-            borderRadius: radii.md,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: 14,
-            marginTop: 8,
-        },
-        feedbackTitle: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-            color: colors.textMuted,
-            marginBottom: 4,
-        },
-        feedbackExplanation: {
-            fontSize: typography.sizes.sm,
-            color: colors.text,
+            fontSize: typography.sizes.sm + 1,
             lineHeight: 20,
+            fontWeight: '600',
+            paddingRight: 6,
         },
-        quizNavRow: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            paddingTop: 12,
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
-        },
-        quizNavBtn: {
-            paddingVertical: 10,
-            paddingHorizontal: 20,
-            borderRadius: radii.sm,
-            backgroundColor: colors.surface,
+        explanationCard: {
+            backgroundColor: colors.surfaceRaised,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
+            padding: 16,
+            marginTop: 10,
         },
-        quizNavBtnText: {
+        explanationTitle: {
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.text,
+        },
+        explanationText: {
+            fontSize: typography.sizes.sm,
+            lineHeight: 22,
+            color: colors.textSecondary,
+        },
+        nextQuizBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: 12,
+            borderRadius: radii.controls,
+            marginTop: 14,
+        },
+        nextQuizBtnText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
         },
         quizResultsCard: {
+            width: '100%',
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 24,
             alignItems: 'center',
-            marginBottom: 16,
         },
-        resultsHeader: {
-            fontSize: typography.sizes.md,
-            color: colors.textMuted,
-            marginBottom: 4,
-        },
-        resultsScoreBig: {
-            fontSize: 48,
+        resultsHeading: {
+            fontSize: typography.sizes.xl,
             fontWeight: '800',
-            color: colors.accent,
+            color: colors.text,
         },
-        resultsScoreDetail: {
-            fontSize: typography.sizes.sm,
+        resultsScoreSummary: {
+            fontSize: typography.sizes.sm + 1,
             color: colors.textSecondary,
+            textAlign: 'center',
+            fontWeight: '600',
         },
-        missedCard: {
-            backgroundColor: colors.surface,
-            borderRadius: radii.md,
+        quizActionBtn: {
+            paddingVertical: 12,
+            paddingHorizontal: 16,
+            borderRadius: radii.controls,
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexDirection: 'row',
+        },
+        quizActionText: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
+        },
+        chatMessageRow: {
+            marginVertical: 6,
+        },
+        chatMessageUser: {
+            alignItems: 'flex-end',
+        },
+        chatMessageAi: {
+            alignItems: 'flex-start',
+        },
+        chatBubble: {
+            maxWidth: '85%',
+            padding: 14,
+            borderRadius: radii.cards,
+        },
+        chatBubbleUser: {
+            borderBottomRightRadius: 4,
+        },
+        chatBubbleAi: {
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 14,
-            marginBottom: 10,
+            borderBottomLeftRadius: 4,
+            width: '100%',
         },
-        missedQText: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
-            color: colors.text,
-            marginBottom: 6,
-        },
-        missedAnswerCorrect: {
-            fontSize: typography.sizes.xs,
+        chatScopeBadge: {
+            fontSize: 10,
             fontWeight: '700',
-            color: colors.success,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
             marginBottom: 4,
         },
-        missedExplanation: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            lineHeight: 18,
-        },
-        donePracticeBtn: {
-            paddingVertical: 12,
-            alignItems: 'center',
-            marginTop: 8,
-        },
-        donePracticeText: {
-            fontSize: typography.sizes.sm,
-            color: colors.textMuted,
-        },
-        scopedChatHeader: {
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 6,
-            paddingHorizontal: 16,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.borderLight,
-        },
-        scopedChatScopeLabel: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            fontWeight: '500',
-        },
-        messageItemWrapper: {
-            marginBottom: 16,
-        },
-        aiMessageText: {
-            fontSize: 15,
-            lineHeight: 24,
-            color: colors.text,
-            fontFamily: typography.fontFamily.sans,
-        },
-        userMessageText: {
-            fontSize: 15,
+        chatMessageText: {
+            fontSize: typography.sizes.sm + 1,
             lineHeight: 22,
-            color: colors.accent,
-            fontWeight: '600',
-            alignSelf: 'flex-end',
-            marginBottom: 4,
         },
-        chatCitationsRow: {
+        citationChipsRow: {
             flexDirection: 'row',
             flexWrap: 'wrap',
             gap: 6,
-            marginTop: 8,
-        },
-        composerBar: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 16,
-            paddingVertical: 10,
-            backgroundColor: colors.surface,
+            marginTop: 10,
+            paddingTop: 8,
             borderTopWidth: 1,
             borderTopColor: colors.border,
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
         },
-        composerInput: {
-            flex: 1,
-            backgroundColor: colors.surfaceRaised,
+        citationChip: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 4,
+            paddingHorizontal: 8,
             borderRadius: radii.full,
-            paddingHorizontal: 14,
-            paddingVertical: 8,
-            fontSize: typography.sizes.sm,
-            color: colors.text,
-            marginRight: 8,
         },
-        sendBtn: {
+        citationChipText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+        },
+        chatComposerBar: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            borderWidth: 1,
+            borderRadius: radii.sheets,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
+            marginBottom: 80,
+        },
+        chatTextInput: {
+            flex: 1,
+            maxHeight: 120,
+            fontSize: typography.sizes.sm,
+            paddingVertical: 6,
+        },
+        chatSendBtn: {
             width: 36,
             height: 36,
             borderRadius: 18,
             alignItems: 'center',
             justifyContent: 'center',
-        },
-        modalOverlay: {
-            flex: 1,
-            backgroundColor: colors.overlay,
-            justifyContent: 'center',
-            alignItems: 'center',
-            padding: 20,
-        },
-        docPickerModalCard: {
-            width: '100%',
-            maxWidth: 360,
-            backgroundColor: colors.surface,
-            borderRadius: radii.xl,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: 16,
-        },
-        docPickerModalTitle: {
-            fontSize: typography.sizes.md,
-            fontWeight: '700',
-            color: colors.text,
-            marginBottom: 12,
-        },
-        emptyDocsNotice: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            paddingVertical: 10,
-        },
-        docPickItem: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 10,
-            paddingHorizontal: 8,
-            borderRadius: radii.sm,
-        },
-        docPickName: {
-            flex: 1,
-            fontSize: typography.sizes.sm,
-            color: colors.text,
+            marginLeft: 8,
         },
         flashcardModalContainer: {
             flex: 1,
@@ -2045,64 +2141,135 @@ const createStyles = (colors: ThemeColors) =>
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
+            paddingBottom: 14,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
         },
         flashcardModalTitle: {
-            fontSize: typography.sizes.lg,
-            fontWeight: '700',
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
             color: colors.text,
         },
-        cardCounter: {
-            textAlign: 'center',
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            marginBottom: 16,
+        closeBtn: {
+            padding: 6,
+            borderRadius: radii.full,
         },
-        flashcardLarge: {
+        flashcard3DBox: {
+            width: '92%',
+            minHeight: 280,
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 28,
-            minHeight: 240,
+            padding: 24,
             justifyContent: 'center',
             alignItems: 'center',
-            marginBottom: 24,
         },
-        flashcardTapHint: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            position: 'absolute',
-            top: 16,
+        flashcardFace: {
+            alignItems: 'center',
+            justifyContent: 'center',
+            width: '100%',
         },
-        flashcardMainText: {
-            fontSize: 22,
-            fontWeight: '700',
+        cardTag: {
+            paddingVertical: 4,
+            paddingHorizontal: 10,
+            borderRadius: radii.full,
+            marginBottom: 16,
+        },
+        cardTagText: {
+            color: '#FFFFFF',
+            fontSize: 10,
+            fontWeight: '800',
+            letterSpacing: 0.5,
+        },
+        flashcardTermText: {
+            fontSize: typography.sizes.xxl,
+            fontWeight: '800',
             color: colors.text,
             textAlign: 'center',
-            lineHeight: 30,
+            marginBottom: 16,
         },
-        flashcardSentence: {
-            fontSize: typography.sizes.sm,
+        tapToFlipNote: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '600',
+        },
+        flashcardMeaningText: {
+            fontSize: typography.sizes.md,
+            lineHeight: 26,
+            color: colors.text,
+            textAlign: 'center',
+        },
+        flashcardSentenceBox: {
+            padding: 12,
+            borderRadius: radii.controls,
+            marginTop: 16,
+            width: '100%',
+        },
+        flashcardSentenceText: {
+            fontSize: typography.sizes.xs + 1,
             fontStyle: 'italic',
+            lineHeight: 20,
             color: colors.textSecondary,
             textAlign: 'center',
-            marginTop: 12,
         },
-        flashcardActionsRow: {
+        flashcardNavRow: {
             flexDirection: 'row',
-            gap: 12,
+            alignItems: 'center',
+            gap: 16,
+            marginTop: 30,
         },
-        flashcardActionBtn: {
-            flex: 1,
-            paddingVertical: 14,
-            borderRadius: radii.sm,
-            borderWidth: 1,
+        flashcardNavBtn: {
+            width: 48,
+            height: 48,
+            borderRadius: 24,
             alignItems: 'center',
             justifyContent: 'center',
         },
-        flashcardActionText: {
+        flashcardKnownBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 12,
+            paddingHorizontal: 20,
+            borderRadius: radii.full,
+        },
+        flashcardKnownBtnText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
+        },
+        modalOverlay: {
+            flex: 1,
+            backgroundColor: colors.overlay,
+            justifyContent: 'center',
+            alignItems: 'center',
+            padding: 20,
+        },
+        pickerModalCard: {
+            width: '100%',
+            maxWidth: 360,
+            backgroundColor: colors.surface,
+            borderRadius: radii.sheets,
+            borderWidth: 1,
+            borderColor: colors.border,
+            padding: 20,
+        },
+        pickerModalTitle: {
+            fontSize: typography.sizes.md,
+            fontWeight: '700',
+            color: colors.text,
+            marginBottom: 12,
+        },
+        docPickItem: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 10,
+            paddingHorizontal: 12,
+            borderRadius: radii.controls,
+        },
+        docPickItemText: {
             fontSize: typography.sizes.sm,
             fontWeight: '600',
+            flex: 1,
         },
     });
 

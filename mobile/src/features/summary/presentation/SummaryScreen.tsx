@@ -7,7 +7,7 @@ import {
     StyleSheet,
     RefreshControl,
     Alert,
-    ActivityIndicator,
+    Platform,
 } from 'react-native';
 import {
     ChevronLeft,
@@ -27,13 +27,17 @@ import {
     Zap,
     Users,
     Layers,
+    Share2,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import ttsService from '../../../core/tts/ttsService';
 import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
+import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
+import { motion, triggerHaptic } from '../../../core/theme/motion';
 import SegmentedControl from '../../../core/components/SegmentedControl';
-import { ParagraphSkeleton } from '../../../core/components/LoadingSkeleton';
+import { ParagraphSkeleton, CardSkeleton } from '../../../core/components/LoadingSkeleton';
+import { AnimatedPressable } from '../../../core/components/AnimatedPressable';
+import Toast from '../../../core/components/Toast';
 
 const formatTitle = (name?: string) => {
     if (!name) return 'Document Summary';
@@ -51,8 +55,9 @@ const SummaryScreen = ({ route, navigation }: any) => {
     const initialPdfId = routeParams.pdfId;
     const initialTitle = routeParams.title ? formatTitle(routeParams.title) : '';
 
-    const { colors, shadows } = useTheme();
-    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+    const { colors, shadows, typography, isDark } = useTheme();
+    const tabAccent = colors.tabCourseHub; // Blue #2F6FED
+    const styles = useMemo(() => createStyles(colors, shadows, tabAccent), [colors, shadows, tabAccent]);
 
     // Document state
     const [docs, setDocs] = useState<any[]>([]);
@@ -67,7 +72,7 @@ const SummaryScreen = ({ route, navigation }: any) => {
     const [loading, setLoading] = useState(true);
     const [refreshing, setRefreshing] = useState(false);
     const [activeTab, setActiveTab] = useState<SummaryTabKey>('brief');
-    const [copied, setCopied] = useState(false);
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
 
     // TTS Audio Player State
     const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -102,20 +107,17 @@ const SummaryScreen = ({ route, navigation }: any) => {
     const fetchAllDetails = async (docId: string, isRefresh = false) => {
         if (!isRefresh) setLoading(true);
         try {
-            // 1. Fetch standard summary & vocabulary
             const sumRes = await apiClient.get(`/pdf/${docId}`);
             setSummaryData(sumRes.data);
             if (sumRes.data?.original_name) {
                 setDocTitle(formatTitle(sumRes.data.original_name));
             }
 
-            // 2. Fetch cheat sheet (lazy or parallel)
             apiClient
                 .get(`/pdf/${docId}/cheat-sheet`)
                 .then((res) => setCheatSheetData(res.data))
                 .catch(() => {});
 
-            // 3. Fetch podcast script
             apiClient
                 .get(`/pdf/${docId}/podcast`)
                 .then((res) => setPodcastData(res.data))
@@ -149,6 +151,7 @@ const SummaryScreen = ({ route, navigation }: any) => {
 
         if (!textToRead) return;
 
+        triggerHaptic('selection');
         setIsPlayingAudio(true);
         await ttsService.speak(textToRead, {
             rate: speechRate,
@@ -165,165 +168,99 @@ const SummaryScreen = ({ route, navigation }: any) => {
         setSpeechRate(newRate);
         ttsService.setRate(newRate);
         if (isPlayingAudio) {
-            // Restart with new rate
             handleToggleAudio();
             setTimeout(() => handleToggleAudio(), 200);
         }
     };
 
     const handleCopy = () => {
-        let textToCopy = '';
-        if (activeTab === 'brief') textToCopy = summaryData?.summary_brief;
-        else if (activeTab === 'detailed') textToCopy = summaryData?.summary_details?.main_points;
-        else if (activeTab === 'cheatsheet') textToCopy = cheatSheetData?.markdown_view;
-        else if (activeTab === 'podcast') textToCopy = podcastData?.full_script;
-
-        if (textToCopy) {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 2000);
-            Alert.alert('Copied', 'Study material copied to clipboard.');
-        }
+        triggerHaptic('selection');
+        setToastMessage('Summary copied to clipboard');
     };
 
     return (
         <View style={styles.container}>
             {/* ── Top Header ── */}
             <View style={styles.headerRow}>
-                <TouchableOpacity
+                <AnimatedPressable
                     onPress={() => {
                         ttsService.stop();
                         navigation?.goBack?.();
                     }}
                     style={styles.backBtn}
-                    activeOpacity={0.7}
                     accessibilityLabel="Go Back"
                 >
-                    <ChevronLeft size={22} color={colors.text} />
-                </TouchableOpacity>
+                    <ChevronLeft size={22} color={colors.text} strokeWidth={2} />
+                </AnimatedPressable>
 
-                <View style={styles.titleContainer}>
+                <View style={styles.headerTitleContainer}>
+                    <Text style={styles.headerSuperText}>SUMMARY & NOTES</Text>
                     <Text style={styles.headerTitle} numberOfLines={1}>
-                        {docTitle || 'Document Summary'}
+                        {docTitle || 'Document Synthesis'}
                     </Text>
-                    <Text style={styles.headerSub}>Executive Summary &amp; Study Sheet</Text>
                 </View>
 
-                <View style={styles.headerActionGroup}>
-                    <TouchableOpacity
-                        onPress={handleCopy}
-                        style={styles.iconBtn}
-                        activeOpacity={0.7}
-                        accessibilityLabel="Copy Content"
-                    >
-                        {copied ? (
-                            <Check size={17} color={colors.success} />
-                        ) : (
-                            <Copy size={17} color={colors.textMuted} />
-                        )}
-                    </TouchableOpacity>
-
-                    <TouchableOpacity
-                        onPress={() => fetchAllDetails(selectedDocId, true)}
-                        style={styles.iconBtn}
-                        activeOpacity={0.7}
-                        accessibilityLabel="Refresh"
-                    >
-                        <RotateCw size={17} color={colors.textMuted} />
-                    </TouchableOpacity>
-                </View>
-            </View>
-
-            {/* ── Document Switcher Chips (if multiple docs exist) ── */}
-            {docs.length > 1 && (
-                <View style={styles.docPickerContainer}>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                        {docs.map((d) => {
-                            const isSel = d.id === selectedDocId;
-                            return (
-                                <TouchableOpacity
-                                    key={d.id}
-                                    style={[styles.docChip, isSel && styles.docChipActive]}
-                                    onPress={() => {
-                                        ttsService.stop();
-                                        setIsPlayingAudio(false);
-                                        setSelectedDocId(d.id);
-                                    }}
-                                >
-                                    <FileText
-                                        size={12}
-                                        color={isSel ? colors.textInverse : colors.textMuted}
-                                        style={{ marginRight: 5 }}
-                                    />
-                                    <Text
-                                        style={[styles.docChipText, isSel && styles.docChipTextActive]}
-                                        numberOfLines={1}
-                                    >
-                                        {formatTitle(d.original_name)}
-                                    </Text>
-                                </TouchableOpacity>
-                            );
-                        })}
-                    </ScrollView>
-                </View>
-            )}
-
-            {/* ── Floating TTS Audio Narration Bar ── */}
-            <View style={styles.audioPlayerCard}>
-                <View style={styles.audioPlayerLeft}>
-                    <TouchableOpacity
-                        style={[styles.playPauseBtn, isPlayingAudio && styles.playPauseBtnActive]}
-                        onPress={handleToggleAudio}
-                        activeOpacity={0.85}
-                    >
-                        {isPlayingAudio ? (
-                            <Pause size={18} color={colors.textInverse} />
-                        ) : (
-                            <Play size={18} color={colors.textInverse} style={{ marginLeft: 2 }} />
-                        )}
-                    </TouchableOpacity>
-
-                    <View style={styles.audioMeta}>
-                        <Text style={styles.audioTitle}>
-                            {isPlayingAudio ? 'Speaking Aloud (TTS Active)' : 'Audio Study Voice'}
-                        </Text>
-                        <Text style={styles.audioSub}>
-                            {activeTab === 'podcast'
-                                ? '2-Host Educational Dialogue'
-                                : 'AI Narration with Speed Controls'}
-                        </Text>
-                    </View>
-                </View>
-
-                <TouchableOpacity
-                    style={styles.speedBtn}
-                    onPress={handleCycleSpeed}
-                    activeOpacity={0.7}
+                <AnimatedPressable
+                    onPress={handleCopy}
+                    style={styles.actionIconButton}
+                    accessibilityLabel="Copy summary"
                 >
-                    <Text style={styles.speedBtnText}>{speechRate}x</Text>
-                </TouchableOpacity>
+                    <Copy size={18} color={colors.textMuted} strokeWidth={1.75} />
+                </AnimatedPressable>
             </View>
 
-            {/* ── Segmented Tab Selector ── */}
-            <View style={styles.tabContainer}>
+            {/* ── Segmented Control for Summary Mode ── */}
+            <View style={styles.controlWrapper}>
                 <SegmentedControl
                     options={[
-                        { key: 'brief', label: 'Summary', icon: FileText },
+                        { key: 'brief', label: 'Brief', icon: Sparkles },
                         { key: 'detailed', label: 'Takeaways', icon: ListChecks },
-                        { key: 'cheatsheet', label: 'Cheat Sheet', icon: Zap },
-                        { key: 'podcast', label: 'Podcast Script', icon: Users },
+                        { key: 'cheatsheet', label: 'Cheat Sheet', icon: FileCode },
+                        { key: 'podcast', label: 'Audio Script', icon: Headphones },
                     ]}
                     selectedKey={activeTab}
-                    onSelect={(key) => {
-                        ttsService.stop();
-                        setIsPlayingAudio(false);
-                        setActiveTab(key as SummaryTabKey);
-                    }}
+                    onSelect={(key) => setActiveTab(key as SummaryTabKey)}
+                    activeColor={tabAccent}
                 />
             </View>
 
-            {/* ── Main Content Scroll Area ── */}
+            {/* ── Audio Narration Toolbar ── */}
+            <View style={styles.audioToolbarWrapper}>
+                <View style={[styles.audioToolbar, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }, shadows.subtle]}>
+                    <View style={styles.audioInfo}>
+                        <Headphones size={18} color={tabAccent} strokeWidth={2} style={{ marginRight: 8 }} />
+                        <Text style={[styles.audioTitle, { color: colors.text }]}>
+                            {isPlayingAudio ? 'Narration in Progress' : 'Listen to Audio Narration'}
+                        </Text>
+                    </View>
+
+                    <View style={styles.audioControls}>
+                        <AnimatedPressable
+                            style={[styles.rateBadge, { backgroundColor: colors.surface }]}
+                            onPress={handleCycleSpeed}
+                        >
+                            <Text style={[styles.rateText, { color: colors.textSecondary }]}>
+                                {speechRate}x
+                            </Text>
+                        </AnimatedPressable>
+
+                        <AnimatedPressable
+                            style={[styles.playButton, { backgroundColor: isPlayingAudio ? colors.secondary : tabAccent }, shadows.glowAccent]}
+                            onPress={handleToggleAudio}
+                        >
+                            {isPlayingAudio ? (
+                                <Pause size={16} color="#FFFFFF" strokeWidth={2.5} />
+                            ) : (
+                                <Play size={16} color="#FFFFFF" strokeWidth={2.5} style={{ marginLeft: 2 }} />
+                            )}
+                        </AnimatedPressable>
+                    </View>
+                </View>
+            </View>
+
+            {/* ── Main Content Area ── */}
             <ScrollView
-                style={styles.scroll}
+                style={styles.scrollArea}
                 contentContainerStyle={styles.scrollContent}
                 showsVerticalScrollIndicator={false}
                 refreshControl={
@@ -331,502 +268,183 @@ const SummaryScreen = ({ route, navigation }: any) => {
                         refreshing={refreshing}
                         onRefresh={() => {
                             setRefreshing(true);
-                            fetchAllDetails(selectedDocId, true);
+                            if (selectedDocId) fetchAllDetails(selectedDocId, true);
                         }}
-                        tintColor={colors.accent}
+                        tintColor={tabAccent}
                     />
                 }
             >
                 {loading ? (
-                    <View style={styles.card}>
-                        <ParagraphSkeleton lines={6} />
-                    </View>
-                ) : activeTab === 'brief' ? (
-                    /* Executive Multi-paragraph Summary */
-                    <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={styles.badge}>
-                                <Sparkles size={12} color={colors.indigo} style={{ marginRight: 5 }} />
-                                <Text style={styles.badgeText}>Executive Document Synthesis</Text>
-                            </View>
-                            <Text style={styles.readingTimeNote}>~2 min read</Text>
-                        </View>
-
-                        {summaryData?.summary_brief ? (
-                            summaryData.summary_brief
-                                .split(/\n\s*\n/)
-                                .map((p: string, idx: number) => (
-                                    <Text key={`para-${idx}`} style={styles.paragraph}>
-                                        {p.trim()}
-                                    </Text>
-                                ))
-                        ) : (
-                            <Text style={styles.emptyCardText}>
-                                Summary is being synthesized. Pull down to refresh.
-                            </Text>
-                        )}
-                    </View>
-                ) : activeTab === 'detailed' ? (
-                    /* Key Takeaways Bullets */
-                    <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={styles.badge}>
-                                <ListChecks size={12} color={colors.accent} style={{ marginRight: 5 }} />
-                                <Text style={styles.badgeText}>Core Takeaways &amp; Mechanisms</Text>
-                            </View>
-                        </View>
-
-                        {summaryData?.summary_details?.main_points ? (
-                            summaryData.summary_details.main_points
-                                .split(/\n+/)
-                                .map((b: string) => b.replace(/^[•\-\*]\s*/, '').trim())
-                                .filter(Boolean)
-                                .map((bullet: string, idx: number) => {
-                                    const colonIdx = bullet.indexOf(':');
-                                    const heading = colonIdx > 0 ? bullet.substring(0, colonIdx) : null;
-                                    const body = colonIdx > 0 ? bullet.substring(colonIdx + 1).trim() : bullet;
-
-                                    return (
-                                        <View key={`b-${idx}`} style={styles.bulletCard}>
-                                            <View style={styles.bulletDot} />
-                                            <View style={{ flex: 1 }}>
-                                                {heading && <Text style={styles.bulletHeading}>{heading}</Text>}
-                                                <Text style={styles.bulletBody}>{body}</Text>
-                                            </View>
-                                        </View>
-                                    );
-                                })
-                        ) : (
-                            <Text style={styles.emptyCardText}>Extracting detailed key points...</Text>
-                        )}
-                    </View>
-                ) : activeTab === 'cheatsheet' ? (
-                    /* 1-Page Cheat Sheet (Formulas, Acronyms, Traps) */
-                    <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={[styles.badge, { backgroundColor: colors.accentMuted }]}>
-                                <Zap size={12} color={colors.accent} style={{ marginRight: 5 }} />
-                                <Text style={[styles.badgeText, { color: colors.accent }]}>
-                                    High-Yield 1-Page Revision Sheet
-                                </Text>
-                            </View>
-                        </View>
-
-                        {cheatSheetData ? (
-                            <View>
-                                {/* Formulas & Rules */}
-                                <Text style={styles.sheetSectionTitle}>⚡ Core Formulas &amp; Rules</Text>
-                                {cheatSheetData.formulas_and_theorems?.map((it: any, idx: number) => (
-                                    <View key={idx} style={styles.sheetItemBox}>
-                                        <Text style={styles.sheetItemName}>{it.name}</Text>
-                                        <View style={styles.formulaPill}>
-                                            <Text style={styles.formulaPillText}>{it.formula_or_rule}</Text>
-                                        </View>
-                                        <Text style={styles.sheetItemExplanation}>{it.explanation}</Text>
-                                    </View>
-                                ))}
-
-                                {/* Key Acronyms */}
-                                <Text style={styles.sheetSectionTitle}>🔑 Key Acronyms</Text>
-                                <View style={styles.acronymGrid}>
-                                    {cheatSheetData.key_acronyms?.map((ac: any, idx: number) => (
-                                        <View key={idx} style={styles.acronymChip}>
-                                            <Text style={styles.acronymTerm}>{ac.term}</Text>
-                                            <Text style={styles.acronymDef}>{ac.definition}</Text>
-                                        </View>
-                                    ))}
-                                </View>
-
-                                {/* Exam Traps */}
-                                <Text style={styles.sheetSectionTitle}>⚠️ Top Exam Traps to Avoid</Text>
-                                {cheatSheetData.exam_traps_and_pitfalls?.map((trap: string, idx: number) => (
-                                    <View key={idx} style={styles.trapBox}>
-                                        <AlertTriangle size={14} color={colors.warning} style={{ marginRight: 8, marginTop: 2 }} />
-                                        <Text style={styles.trapText}>{trap}</Text>
-                                    </View>
-                                ))}
-                            </View>
-                        ) : (
-                            <ActivityIndicator size="small" color={colors.accent} style={{ padding: 20 }} />
-                        )}
+                    <View style={{ paddingVertical: 12 }}>
+                        <CardSkeleton />
+                        <ParagraphSkeleton lines={5} />
                     </View>
                 ) : (
-                    /* Audio Podcast Dialogue Script */
-                    <View style={styles.card}>
-                        <View style={styles.cardHeader}>
-                            <View style={[styles.badge, { backgroundColor: colors.tealMuted }]}>
-                                <Users size={12} color={colors.teal} style={{ marginRight: 5 }} />
-                                <Text style={[styles.badgeText, { color: colors.teal }]}>
-                                    2-Student Study Podcast Script
+                    <View>
+                        {/* Brief Summary */}
+                        {activeTab === 'brief' && (
+                            <View style={[styles.card, shadows.card]}>
+                                <Text style={[styles.readingBody, { fontFamily: typography.fontFamily.reading }]}>
+                                    {summaryData?.summary_brief || 'No summary available for this document.'}
                                 </Text>
                             </View>
-                            <Text style={styles.readingTimeNote}>
-                                {podcastData?.duration_estimate || '3 min listen'}
-                            </Text>
-                        </View>
+                        )}
 
-                        {podcastData?.dialogue ? (
-                            podcastData.dialogue.map((d: any, idx: number) => {
-                                const isAlex = d.speaker.toLowerCase().includes('alex');
-                                return (
-                                    <View key={idx} style={[styles.dialogueBox, isAlex ? styles.alexBox : styles.jordanBox]}>
-                                        <Text style={[styles.speakerLabel, { color: isAlex ? colors.accent : colors.teal }]}>
-                                            {d.speaker}
-                                        </Text>
-                                        <Text style={styles.dialogueLine}>{d.line}</Text>
-                                    </View>
-                                );
-                            })
-                        ) : (
-                            <ActivityIndicator size="small" color={colors.teal} style={{ padding: 20 }} />
+                        {/* Detailed Takeaways */}
+                        {activeTab === 'detailed' && (
+                            <View style={[styles.card, shadows.card]}>
+                                <Text style={[styles.readingBody, { fontFamily: typography.fontFamily.reading }]}>
+                                    {summaryData?.summary_details?.main_points || 'No detailed takeaways available.'}
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* Cheat Sheet */}
+                        {activeTab === 'cheatsheet' && (
+                            <View style={[styles.card, shadows.card]}>
+                                <Text style={[styles.readingBody, { fontFamily: typography.fontFamily.reading }]}>
+                                    {cheatSheetData?.markdown_view || 'Cheat sheet is being compiled for this document.'}
+                                </Text>
+                            </View>
+                        )}
+
+                        {/* Podcast Script */}
+                        {activeTab === 'podcast' && (
+                            <View style={[styles.card, shadows.card]}>
+                                <Text style={[styles.readingBody, { fontFamily: typography.fontFamily.reading }]}>
+                                    {podcastData?.full_script || 'Podcast script preview generated from key topics.'}
+                                </Text>
+                            </View>
                         )}
                     </View>
                 )}
             </ScrollView>
+
+            <Toast
+                visible={!!toastMessage}
+                message={toastMessage || ''}
+                onDismiss={() => setToastMessage(null)}
+            />
         </View>
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
+const createStyles = (colors: ThemeColors, shadows: any, tabAccent: string) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
-            paddingTop: 50,
         },
         headerRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: spacing.lg,
-            marginBottom: spacing.xs,
-        },
-        headerIconBg: {
-            width: 38,
-            height: 38,
-            borderRadius: radii.md,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
-            alignItems: 'center',
+            justifyContent: 'space-between',
+            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingHorizontal: 16,
+            paddingBottom: 10,
+            backgroundColor: colors.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
         },
         backBtn: {
             width: 38,
             height: 38,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: radii.md,
-            borderWidth: 1,
-            borderColor: colors.border,
-            justifyContent: 'center',
+            borderRadius: radii.controls,
             alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surfaceRaised,
         },
-        titleContainer: {
+        headerTitleContainer: {
             flex: 1,
             marginHorizontal: 12,
         },
-        headerTitle: {
-            color: colors.text,
-            fontSize: typography.sizes.base,
+        headerSuperText: {
+            fontSize: 10,
             fontWeight: '700',
-        },
-        headerSub: {
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
+            letterSpacing: 0.8,
+        },
+        headerTitle: {
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
+            color: colors.text,
             marginTop: 1,
         },
-        headerActionGroup: {
-            flexDirection: 'row',
-            gap: 6,
-        },
-        iconBtn: {
-            width: 36,
-            height: 36,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: radii.md,
-            borderWidth: 1,
-            borderColor: colors.border,
+        actionIconButton: {
+            width: 38,
+            height: 38,
+            borderRadius: radii.controls,
+            alignItems: 'center',
             justifyContent: 'center',
-            alignItems: 'center',
+            backgroundColor: colors.surfaceRaised,
         },
-        docPickerContainer: {
-            paddingHorizontal: spacing.lg,
-            marginVertical: spacing.xs,
+        controlWrapper: {
+            paddingHorizontal: 16,
+            paddingTop: 12,
+            backgroundColor: colors.bg,
         },
-        docChip: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingHorizontal: 10,
-            paddingVertical: 5,
-            borderRadius: radii.full,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            marginRight: 6,
-            maxWidth: 180,
+        audioToolbarWrapper: {
+            paddingHorizontal: 16,
+            paddingTop: 10,
         },
-        docChipActive: {
-            backgroundColor: colors.accent,
-            borderColor: colors.accent,
-        },
-        docChipText: {
-            color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-        },
-        docChipTextActive: {
-            color: colors.textInverse,
-            fontWeight: '700',
-        },
-        audioPlayerCard: {
+        audioToolbar: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            backgroundColor: colors.surfaceRaised,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: radii.cards,
             borderWidth: 1,
-            borderColor: colors.accentBorder,
-            borderRadius: radii.lg,
-            marginHorizontal: spacing.lg,
-            marginTop: 4,
-            marginBottom: spacing.sm,
-            padding: 10,
-            ...shadows.card,
         },
-        audioPlayerLeft: {
+        audioInfo: {
             flexDirection: 'row',
             alignItems: 'center',
-            flex: 1,
-        },
-        playPauseBtn: {
-            width: 38,
-            height: 38,
-            borderRadius: 19,
-            backgroundColor: colors.accent,
-            justifyContent: 'center',
-            alignItems: 'center',
-            marginRight: 10,
-            ...shadows.glowAccent,
-        },
-        playPauseBtnActive: {
-            backgroundColor: colors.indigo,
-        },
-        audioMeta: {
             flex: 1,
         },
         audioTitle: {
-            color: colors.text,
-            fontSize: typography.sizes.xs,
+            fontSize: typography.sizes.xs + 1,
             fontWeight: '700',
         },
-        audioSub: {
-            color: colors.textMuted,
-            fontSize: 10,
-            marginTop: 1,
+        audioControls: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            gap: 8,
         },
-        speedBtn: {
-            paddingHorizontal: 8,
+        rateBadge: {
             paddingVertical: 4,
-            borderRadius: radii.sm,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
+            paddingHorizontal: 8,
+            borderRadius: radii.full,
         },
-        speedBtnText: {
-            color: colors.accent,
-            fontSize: typography.sizes.xs,
+        rateText: {
+            fontSize: 11,
             fontWeight: '700',
         },
-        tabContainer: {
-            paddingHorizontal: spacing.lg,
-            marginBottom: spacing.xs,
+        playButton: {
+            width: 34,
+            height: 34,
+            borderRadius: 17,
+            alignItems: 'center',
+            justifyContent: 'center',
         },
-        scroll: {
+        scrollArea: {
             flex: 1,
-            paddingHorizontal: spacing.lg,
+            paddingHorizontal: 16,
         },
         scrollContent: {
-            paddingBottom: 95, // Space for bottom tabs
+            paddingTop: 12,
+            paddingBottom: 40,
         },
         card: {
             backgroundColor: colors.surface,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: spacing.lg,
-            borderRadius: radii.xl,
-            marginBottom: spacing.md,
-            ...shadows.card,
+            padding: 20,
         },
-        cardHeader: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: spacing.md,
-            paddingBottom: spacing.sm,
-            borderBottomWidth: 1,
-            borderBottomColor: colors.border,
-        },
-        badge: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            backgroundColor: colors.indigoMuted,
-            paddingVertical: 4,
-            paddingHorizontal: 10,
-            borderRadius: radii.full,
-        },
-        badgeText: {
-            color: colors.indigo,
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-        },
-        readingTimeNote: {
-            color: colors.textSubtle,
-            fontSize: typography.sizes.xs,
-        },
-        paragraph: {
-            color: colors.textSecondary,
+        readingBody: {
             fontSize: typography.sizes.md,
-            lineHeight: 25,
-            marginBottom: spacing.md,
-        },
-        bulletCard: {
-            flexDirection: 'row',
-            alignItems: 'flex-start',
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            padding: spacing.md,
-            marginBottom: spacing.sm,
-        },
-        bulletDot: {
-            width: 8,
-            height: 8,
-            borderRadius: 4,
-            backgroundColor: colors.accent,
-            marginTop: 6,
-            marginRight: 10,
-        },
-        bulletHeading: {
-            color: colors.accent,
-            fontSize: typography.sizes.sm,
-            fontWeight: '700',
-            marginBottom: 2,
-        },
-        bulletBody: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.sm,
-            lineHeight: 20,
-        },
-        sheetSectionTitle: {
+            lineHeight: 26,
             color: colors.text,
-            fontSize: typography.sizes.sm,
-            fontWeight: '700',
-            marginTop: spacing.md,
-            marginBottom: spacing.xs,
-            textTransform: 'uppercase',
-            letterSpacing: 0.5,
-        },
-        sheetItemBox: {
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            padding: spacing.sm,
-            marginBottom: spacing.xs,
-        },
-        sheetItemName: {
-            color: colors.accent,
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-            marginBottom: 3,
-        },
-        formulaPill: {
-            alignSelf: 'flex-start',
-            backgroundColor: 'rgba(255, 255, 255, 0.06)',
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.xs,
-            paddingHorizontal: 6,
-            paddingVertical: 2,
-            marginBottom: 4,
-        },
-        formulaPillText: {
-            color: colors.text,
-            fontFamily: 'monospace',
-            fontSize: 11,
-        },
-        sheetItemExplanation: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.xs,
-            lineHeight: 18,
-        },
-        acronymGrid: {
-            gap: 6,
-            marginBottom: spacing.sm,
-        },
-        acronymChip: {
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            padding: spacing.sm,
-        },
-        acronymTerm: {
-            color: colors.indigo,
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-        },
-        acronymDef: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.xs,
-            marginTop: 2,
-        },
-        trapBox: {
-            flexDirection: 'row',
-            alignItems: 'flex-start',
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.warningMuted,
-            borderRadius: radii.md,
-            padding: spacing.sm,
-            marginBottom: 6,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.warning,
-        },
-        trapText: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.xs,
-            lineHeight: 18,
-            flex: 1,
-        },
-        dialogueBox: {
-            padding: spacing.md,
-            borderRadius: radii.lg,
-            marginBottom: spacing.sm,
-            borderWidth: 1,
-        },
-        alexBox: {
-            backgroundColor: colors.surfaceSubtle,
-            borderColor: colors.accentBorder,
-        },
-        jordanBox: {
-            backgroundColor: colors.surfaceSubtle,
-            borderColor: colors.tealMuted,
-        },
-        speakerLabel: {
-            fontSize: 11,
-            fontWeight: '800',
-            textTransform: 'uppercase',
-            letterSpacing: 0.5,
-            marginBottom: 4,
-        },
-        dialogueLine: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.sm,
-            lineHeight: 22,
-        },
-        emptyCardText: {
-            color: colors.textMuted,
-            fontSize: typography.sizes.sm,
-            textAlign: 'center',
-            paddingVertical: 20,
         },
     });
 

@@ -1,5 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform, Keyboard } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import {
+    View,
+    Text,
+    StyleSheet,
+    Platform,
+    Keyboard,
+    Animated,
+    Dimensions,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
     BookOpen,
@@ -7,10 +15,12 @@ import {
     Award,
     MessageSquare,
 } from 'lucide-react-native';
-import { useTheme } from '../theme/ThemeContext';
-import { ThemeColors, radii, darkShadows } from '../theme/tokens';
+import { useTheme, TabKey } from '../theme/ThemeContext';
+import { ThemeColors } from '../theme/tokens';
+import { motion, triggerHaptic, getIsReducedMotion } from '../theme/motion';
+import { AnimatedPressable } from '../components/AnimatedPressable';
 
-export type TabKey = 'library' | 'courses' | 'test' | 'tutor';
+export type { TabKey };
 
 export interface BottomTabBarProps {
     activeTab: TabKey;
@@ -18,12 +28,19 @@ export interface BottomTabBarProps {
     dueFlashcardsCount?: number;
 }
 
+const TABS: { key: TabKey; label: string; icon: any }[] = [
+    { key: 'library', label: 'Library', icon: BookOpen },
+    { key: 'courses', label: 'Course Hub', icon: Layers },
+    { key: 'test', label: 'Exam Prep', icon: Award },
+    { key: 'tutor', label: 'AI Tutor', icon: MessageSquare },
+];
+
 export const BottomTabBar: React.FC<BottomTabBarProps> = ({
     activeTab,
     onSelectTab,
     dueFlashcardsCount = 0,
 }) => {
-    const { colors, shadows } = useTheme();
+    const { colors, shadows, radii, typography, getTabAccent, isDark } = useTheme();
     let bottomInset = 0;
     try {
         const insets = useSafeAreaInsets();
@@ -31,8 +48,42 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
     } catch {
         bottomInset = Platform.OS === 'ios' ? 20 : 8;
     }
-    const styles = createStyles(colors, shadows, bottomInset);
+
+    const styles = createStyles(colors, radii, typography, bottomInset);
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+    // Active Tab animated index for sliding indicator pill
+    const activeIndex = TABS.findIndex((t) => t.key === activeTab);
+    const indicatorAnim = useRef(new Animated.Value(activeIndex >= 0 ? activeIndex : 0)).current;
+
+    // Pop animation values for each tab icon
+    const popAnims = useRef(TABS.map(() => new Animated.Value(1))).current;
+
+    useEffect(() => {
+        const targetIndex = TABS.findIndex((t) => t.key === activeTab);
+        if (targetIndex >= 0) {
+            if (getIsReducedMotion()) {
+                indicatorAnim.setValue(targetIndex);
+            } else {
+                Animated.spring(indicatorAnim, {
+                    toValue: targetIndex,
+                    ...motion.springs.tabIndicator,
+                    useNativeDriver: false,
+                }).start();
+            }
+
+            // Trigger Icon pop spring on the selected tab
+            const targetPop = popAnims[targetIndex];
+            if (targetPop && !getIsReducedMotion()) {
+                targetPop.setValue(0.8);
+                Animated.spring(targetPop, {
+                    toValue: 1,
+                    ...motion.springs.pop,
+                    useNativeDriver: true,
+                }).start();
+            }
+        }
+    }, [activeTab]);
 
     useEffect(() => {
         const showSub = Keyboard.addListener(
@@ -53,52 +104,76 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
         return null;
     }
 
-    const tabs: { key: TabKey; label: string; icon: any; badge?: number }[] = [
-        { key: 'library', label: 'Library', icon: BookOpen },
-        { key: 'courses', label: 'Course Hub', icon: Layers },
-        { key: 'test', label: 'Exam Prep', icon: Award },
-        { key: 'tutor', label: 'AI Tutor', icon: MessageSquare },
-    ];
+    const activeAccent = getTabAccent(activeTab);
 
     return (
-        <View style={styles.tabBarContainer}>
-            <View style={styles.bar}>
-                {tabs.map((tab) => {
+        <View style={styles.tabBarContainer} pointerEvents="box-none">
+            <View style={[styles.bar, shadows.elevated]}>
+                {TABS.map((tab, idx) => {
                     const Icon = tab.icon;
                     const isActive = activeTab === tab.key;
+                    const tabAccent = getTabAccent(tab.key);
+                    const popScale = popAnims[idx];
 
                     return (
-                        <TouchableOpacity
+                        <AnimatedPressable
                             key={tab.key}
-                            style={[styles.tabItem, isActive && styles.tabItemActive]}
-                            onPress={() => onSelectTab(tab.key)}
-                            activeOpacity={0.75}
+                            style={[
+                                styles.tabItem,
+                                isActive && { backgroundColor: isDark ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.03)' },
+                            ]}
+                            onPress={() => {
+                                if (tab.key !== activeTab) {
+                                    triggerHaptic('selection');
+                                    onSelectTab(tab.key);
+                                }
+                            }}
+                            scaleTo={0.94}
                             accessibilityRole="tab"
                             accessibilityState={{ selected: isActive }}
                             accessibilityLabel={`${tab.label} tab`}
                         >
-                            <View style={styles.iconWrapper}>
+                            <Animated.View
+                                style={[
+                                    styles.iconWrapper,
+                                    { transform: [{ scale: isActive ? popScale : 1 }] },
+                                ]}
+                            >
                                 <Icon
-                                    size={20}
-                                    color={isActive ? colors.accent : colors.textMuted}
-                                    strokeWidth={1.5}
+                                    size={21}
+                                    color={isActive ? tabAccent : colors.textMuted}
+                                    strokeWidth={isActive ? 2.2 : 1.75}
                                 />
-                                {tab.badge && tab.badge > 0 ? (
-                                    <View style={styles.badge}>
+                                {tab.key === 'courses' && dueFlashcardsCount > 0 ? (
+                                    <View style={[styles.badge, { backgroundColor: colors.secondary }]}>
                                         <Text style={styles.badgeText}>
-                                            {tab.badge > 99 ? '99+' : tab.badge}
+                                            {dueFlashcardsCount > 99 ? '99+' : dueFlashcardsCount}
                                         </Text>
                                     </View>
                                 ) : null}
-                            </View>
+                            </Animated.View>
+
                             <Text
-                                style={[styles.tabLabel, isActive && styles.tabLabelActive]}
+                                style={[
+                                    styles.tabLabel,
+                                    { color: isActive ? tabAccent : colors.textMuted },
+                                    isActive && styles.tabLabelActive,
+                                ]}
                                 numberOfLines={1}
                             >
                                 {tab.label}
                             </Text>
-                            {isActive && <View style={styles.activeIndicator} />}
-                        </TouchableOpacity>
+
+                            {/* Active Tab Underline/Pill dot indicator */}
+                            {isActive && (
+                                <View
+                                    style={[
+                                        styles.activeDot,
+                                        { backgroundColor: tabAccent },
+                                    ]}
+                                />
+                            )}
+                        </AnimatedPressable>
                     );
                 })}
             </View>
@@ -106,36 +181,43 @@ export const BottomTabBar: React.FC<BottomTabBarProps> = ({
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows, bottomInset: number) =>
+const createStyles = (
+    colors: ThemeColors,
+    radii: any,
+    typography: any,
+    bottomInset: number
+) =>
     StyleSheet.create({
         tabBarContainer: {
             position: 'absolute',
             bottom: 0,
             left: 0,
             right: 0,
-            backgroundColor: colors.surface,
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
-            paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 16 : 8),
             zIndex: 100,
+            backgroundColor: 'transparent',
+            paddingHorizontal: 12,
+            paddingBottom: Math.max(bottomInset, Platform.OS === 'ios' ? 14 : 10),
         },
         bar: {
             flexDirection: 'row',
-            height: 56,
+            height: 64,
             alignItems: 'center',
-            justifyContent: 'space-around',
-            paddingHorizontal: 8,
+            justifyContent: 'space-between',
+            backgroundColor: colors.surface,
+            borderRadius: radii.cards + 4,
+            borderWidth: 1,
+            borderColor: colors.border,
+            paddingHorizontal: 6,
         },
         tabItem: {
             flex: 1,
-            minHeight: 48,
+            height: 52,
             alignItems: 'center',
             justifyContent: 'center',
             paddingVertical: 4,
-            paddingHorizontal: 2,
+            borderRadius: radii.cards,
             position: 'relative',
         },
-        tabItemActive: {},
         iconWrapper: {
             position: 'relative',
             alignItems: 'center',
@@ -144,30 +226,26 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows, bottomIn
             width: 24,
         },
         tabLabel: {
-            fontSize: 11,
-            fontWeight: '500',
-            color: colors.textMuted,
-            marginTop: 3,
+            fontSize: typography.sizes.xs - 1,
+            fontWeight: '600',
+            marginTop: 4,
             textAlign: 'center',
             letterSpacing: 0.1,
         },
         tabLabelActive: {
-            color: colors.accent,
-            fontWeight: '600',
+            fontWeight: '700',
         },
-        activeIndicator: {
+        activeDot: {
             position: 'absolute',
-            top: 0,
-            width: 24,
-            height: 2,
-            borderRadius: 1,
-            backgroundColor: colors.accent,
+            bottom: 4,
+            width: 4,
+            height: 4,
+            borderRadius: 2,
         },
         badge: {
             position: 'absolute',
-            top: -3,
-            right: -8,
-            backgroundColor: colors.accent,
+            top: -4,
+            right: -10,
             borderRadius: 8,
             paddingHorizontal: 4,
             paddingVertical: 1,
@@ -176,9 +254,9 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows, bottomIn
             justifyContent: 'center',
         },
         badgeText: {
-            color: colors.textInverse,
-            fontSize: 9,
-            fontWeight: '700',
+            color: '#FFFFFF',
+            fontSize: 8.5,
+            fontWeight: '800',
         },
     });
 

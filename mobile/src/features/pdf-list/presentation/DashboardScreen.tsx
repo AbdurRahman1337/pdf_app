@@ -12,6 +12,7 @@ import {
     Alert,
     ScrollView,
     Platform,
+    Animated,
 } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -35,16 +36,23 @@ import {
     Edit3,
     Layers,
     ArrowLeft,
+    Flame,
+    Sparkles,
+    Check,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
+import { ThemeColors, typography, radii, spacing, gradients } from '../../../core/theme/tokens';
+import { motion, triggerHaptic, getIsReducedMotion } from '../../../core/theme/motion';
 import EmptyState from '../../../core/components/EmptyState';
 import ProgressRing from '../../../core/components/ProgressRing';
 import ConfirmDialog from '../../../core/components/ConfirmDialog';
 import Toast from '../../../core/components/Toast';
 import OfflineBanner from '../../../core/components/OfflineBanner';
 import { CardSkeleton } from '../../../core/components/LoadingSkeleton';
+import { AnimatedPressable } from '../../../core/components/AnimatedPressable';
+import { GradientView } from '../../../core/components/GradientView';
+import StatusChip from '../../../core/components/StatusChip';
 
 export interface PDFDoc {
     id: string;
@@ -87,13 +95,13 @@ export const DEFAULT_INITIAL_COURSE: CourseItem = {
     description: 'Comprehensive course covering Biology, Chemistry, and Physics.',
     target_exam_or_degree: 'Pre-Med / Biology Track',
     created_at: new Date().toISOString(),
-    overall_progress_percentage: 60,
+    overall_progress_percentage: 65,
     subjects: [
         {
             id: 'sub_bio_101',
             name: 'Cell Biology & Genetics',
             code: 'BIO-101',
-            color: '#0F6B5C',
+            color: '#0D9488',
             mastery_percentage: 75,
             documents: [
                 {
@@ -114,8 +122,8 @@ export const DEFAULT_INITIAL_COURSE: CourseItem = {
             id: 'sub_chem_102',
             name: 'Organic & Physical Chemistry',
             code: 'CHEM-102',
-            color: '#2E7D4F',
-            mastery_percentage: 50,
+            color: '#2F6FED',
+            mastery_percentage: 55,
             documents: [
                 {
                     id: 'doc_chem_ch1',
@@ -129,7 +137,7 @@ export const DEFAULT_INITIAL_COURSE: CourseItem = {
             id: 'sub_phy_103',
             name: 'Mechanics & Thermodynamics',
             code: 'PHY-103',
-            color: '#B7791F',
+            color: '#F2644A',
             mastery_percentage: 40,
             documents: [],
         },
@@ -144,9 +152,9 @@ export const formatFileSize = (bytes?: number) => {
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 };
 
-const LibraryScreen = ({ navigation }: any) => {
+const DashboardScreen = ({ navigation }: any) => {
     const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
 
     // Data State
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
@@ -168,7 +176,6 @@ const LibraryScreen = ({ navigation }: any) => {
         { id: '1', name: 'Biology', files: [] },
         { id: '2', name: 'Chemistry', files: [] },
     ]);
-    const [newSubjectInput, setNewSubjectInput] = useState('');
 
     // Ingestion Sequence State (The Signature Moment)
     const [isIngesting, setIsIngesting] = useState(false);
@@ -180,6 +187,31 @@ const LibraryScreen = ({ navigation }: any) => {
         progressPct: number;
         error?: string;
     }[]>([]);
+
+    // Breathing dropzone animation ref
+    const breatheAnim = useRef(new Animated.Value(1)).current;
+    useEffect(() => {
+        if (isAddCourseModalOpen && !getIsReducedMotion()) {
+            const loop = Animated.loop(
+                Animated.sequence([
+                    Animated.timing(breatheAnim, {
+                        toValue: 1.025,
+                        duration: motion.durations.breathe / 2,
+                        easing: motion.easings.easeInOut,
+                        useNativeDriver: true,
+                    }),
+                    Animated.timing(breatheAnim, {
+                        toValue: 1,
+                        duration: motion.durations.breathe / 2,
+                        easing: motion.easings.easeInOut,
+                        useNativeDriver: true,
+                    }),
+                ])
+            );
+            loop.start();
+            return () => loop.stop();
+        }
+    }, [isAddCourseModalOpen]);
 
     // Actions & Overflow State
     const [courseActionTarget, setCourseActionTarget] = useState<CourseItem | null>(null);
@@ -196,11 +228,23 @@ const LibraryScreen = ({ navigation }: any) => {
     const [deletedItemCache, setDeletedItemCache] = useState<{ courses: CourseItem[]; message: string } | null>(null);
     const [toastMessage, setToastMessage] = useState<string | null>(null);
 
-    // Load initial courses
+    // Floating Button hide/show on scroll
+    const [isFabVisible, setIsFabVisible] = useState(true);
+    const lastScrollY = useRef(0);
+
+    const handleScroll = (event: any) => {
+        const currentY = event.nativeEvent.contentOffset.y;
+        if (currentY > lastScrollY.current + 20 && currentY > 40) {
+            if (isFabVisible) setIsFabVisible(false);
+        } else if (currentY < lastScrollY.current - 20) {
+            if (!isFabVisible) setIsFabVisible(true);
+        }
+        lastScrollY.current = currentY;
+    };
+
     // Load initial courses
     const loadCourses = async () => {
         try {
-            // First check local storage
             const saved = await AsyncStorage.getItem(COURSES_STORAGE_KEY);
             if (saved) {
                 const parsed = JSON.parse(saved);
@@ -209,7 +253,6 @@ const LibraryScreen = ({ navigation }: any) => {
                 }
             }
 
-            // Sync with backend course list if reachable
             const res = await apiClient.get('/courses/list').catch(() => null);
             if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
                 const sanitizedBackend: CourseItem[] = res.data.map((c: any) => ({
@@ -224,7 +267,7 @@ const LibraryScreen = ({ navigation }: any) => {
                               id: s.id || `sub_${Date.now()}`,
                               name: s.name || s.subject_name || 'General Subject',
                               code: s.code || '',
-                              color: s.color || '#0F6B5C',
+                              color: s.color || '#0D9488',
                               documents: Array.isArray(s.documents) ? s.documents : [],
                               mastery_percentage: s.mastery_percentage || 0,
                               vocab_count: s.vocab_count || 0,
@@ -232,10 +275,8 @@ const LibraryScreen = ({ navigation }: any) => {
                         : [],
                 }));
 
-                // Merge backend courses with existing local data
                 setCourses((prev) => {
                     const merged = [...sanitizedBackend];
-                    // Keep any custom user-added courses
                     (prev || []).forEach((p) => {
                         if (p && !merged.some((m) => m && m.id === p.id)) {
                             merged.push(p);
@@ -268,7 +309,6 @@ const LibraryScreen = ({ navigation }: any) => {
         }
     };
 
-    // Filter courses based on search
     const filteredCourses = useMemo(() => {
         if (!searchQuery.trim()) return courses;
         const q = searchQuery.toLowerCase();
@@ -283,6 +323,12 @@ const LibraryScreen = ({ navigation }: any) => {
             return matchTitle || matchTarget || matchSubject || matchDoc;
         });
     }, [courses, searchQuery]);
+
+    const overallStudyProgress = useMemo(() => {
+        if (!courses || courses.length === 0) return 0;
+        const total = courses.reduce((sum, c) => sum + (c.overall_progress_percentage || 0), 0);
+        return Math.round(total / courses.length);
+    }, [courses]);
 
     // Navigate to a document in Course Hub
     const handleOpenDocument = async (course: CourseItem, subject: SubjectItem, doc: PDFDoc) => {
@@ -322,7 +368,6 @@ const LibraryScreen = ({ navigation }: any) => {
             });
 
             if (!result.canceled && result.assets && result.assets.length > 0) {
-                // Validate file extensions and size
                 const validFiles: any[] = [];
                 for (const file of result.assets) {
                     const isPdf = file.name?.toLowerCase().endsWith('.pdf') || file.mimeType === 'application/pdf';
@@ -349,7 +394,7 @@ const LibraryScreen = ({ navigation }: any) => {
         }
     };
 
-    // Trigger Ingestion Workflow with Staged Progress
+    // Staged Course Ingestion Workflow (The Signature Moment)
     const handleStartCourseIngestion = async () => {
         if (!newCourseTitle.trim()) {
             Alert.alert('Course Title Required', 'Please enter a name for this course.');
@@ -358,24 +403,23 @@ const LibraryScreen = ({ navigation }: any) => {
 
         const validSubjects = subjectDrafts.filter((s) => s.name.trim().length > 0);
         if (validSubjects.length === 0) {
-            Alert.alert('Subject Required', 'Please define at least one subject.');
+            Alert.alert('Subject Required', 'Please define at least one subject track.');
             return;
         }
 
         setIsAddCourseModalOpen(false);
         setIsIngesting(true);
+        triggerHaptic('selection');
 
-        // Prepare ingestion stage tracker rows
         const initialIngestion = validSubjects.map((s) => ({
             id: s.id,
             name: s.name,
-            fileName: s.files.length > 0 ? s.files.map((f) => f.name).join(', ') : 'Reference materials',
+            fileName: s.files.length > 0 ? s.files.map((f) => f.name).join(', ') : 'Standard curriculum reference',
             stage: 'uploading' as const,
-            progressPct: 15,
+            progressPct: 20,
         }));
         setIngestionSubjects(initialIngestion);
 
-        // Create new Course Container
         const newCourseId = `course_${Date.now()}`;
         const builtSubjects: SubjectItem[] = [];
 
@@ -386,7 +430,7 @@ const LibraryScreen = ({ navigation }: any) => {
 
             // Step 1: Uploading
             setIngestionSubjects((prev) =>
-                prev.map((item, idx) => (idx === i ? { ...item, stage: 'uploading', progressPct: 30 } : item))
+                prev.map((item, idx) => (idx === i ? { ...item, stage: 'uploading', progressPct: 35 } : item))
             );
 
             // Step 2: Reading pages
@@ -395,7 +439,6 @@ const LibraryScreen = ({ navigation }: any) => {
                 prev.map((item, idx) => (idx === i ? { ...item, stage: 'reading', progressPct: 65 } : item))
             );
 
-            // Ingest files if attached
             if (sDraft.files.length > 0) {
                 for (const file of sDraft.files) {
                     try {
@@ -420,7 +463,6 @@ const LibraryScreen = ({ navigation }: any) => {
                             uploaded_at: new Date().toISOString(),
                         });
                     } catch (uploadErr) {
-                        console.warn('Doc upload fallback:', uploadErr);
                         uploadedDocs.push({
                             id: `doc_${Date.now()}`,
                             filename: file.name,
@@ -430,23 +472,23 @@ const LibraryScreen = ({ navigation }: any) => {
                     }
                 }
             } else {
-                // Default placeholder notes if no initial PDFs attached yet
                 uploadedDocs.push({
                     id: `doc_initial_${Date.now()}`,
-                    filename: `${sDraft.name}_Overview_Notes.pdf`,
-                    size_bytes: 1250000,
+                    filename: `${sDraft.name}_Foundations_Chapter.pdf`,
+                    size_bytes: 1450000,
                     status: 'READY',
                 });
             }
 
             // Step 3: Building search index
-            await new Promise((r) => setTimeout(r, 600));
+            await new Promise((r) => setTimeout(r, 550));
             setIngestionSubjects((prev) =>
                 prev.map((item, idx) => (idx === i ? { ...item, stage: 'indexing', progressPct: 90 } : item))
             );
 
             // Step 4: Ready!
             await new Promise((r) => setTimeout(r, 400));
+            triggerHaptic('success');
             setIngestionSubjects((prev) =>
                 prev.map((item, idx) => (idx === i ? { ...item, stage: 'ready', progressPct: 100 } : item))
             );
@@ -455,19 +497,19 @@ const LibraryScreen = ({ navigation }: any) => {
                 id: subjectId,
                 name: sDraft.name,
                 code: `${sDraft.name.slice(0, 3).toUpperCase()}-${100 + i}`,
-                color: ['#0F6B5C', '#2E7D4F', '#B7791F', '#818CF8', '#C084FC'][i % 5],
+                color: ['#0D9488', '#2F6FED', '#F2644A', '#7C5CFA', '#16A34A'][i % 5],
                 documents: uploadedDocs,
                 mastery_percentage: 0,
-                vocab_count: uploadedDocs.length * 15,
+                vocab_count: uploadedDocs.length * 12,
             });
         }
 
         const newCourse: CourseItem = {
             id: newCourseId,
             title: newCourseTitle.trim(),
-            target_exam_or_degree: newCourseTarget.trim() || 'General Curriculum',
+            target_exam_or_degree: newCourseTarget.trim() || 'Core Curriculum',
             created_at: new Date().toISOString(),
-            overall_progress_percentage: 0,
+            overall_progress_percentage: 15,
             subjects: builtSubjects,
             total_documents: builtSubjects.reduce((acc, s) => acc + (s?.documents || []).length, 0),
         };
@@ -475,17 +517,16 @@ const LibraryScreen = ({ navigation }: any) => {
         const updatedList = [newCourse, ...courses];
         await saveCourses(updatedList);
 
-        // Reset wizard drafts
         setNewCourseTitle('');
         setNewCourseTarget('');
         setSubjectDrafts([
             { id: '1', name: 'Biology', files: [] },
             { id: '2', name: 'Chemistry', files: [] },
         ]);
-        setToastMessage(`Course "${newCourse.title}" created successfully.`);
+        setToastMessage(`Course "${newCourse.title}" ready to study.`);
     };
 
-    // Course Deletion with Undo Toast
+    // Delete handling
     const handleConfirmDelete = () => {
         if (!deleteConfirmTarget) return;
 
@@ -531,7 +572,7 @@ const LibraryScreen = ({ navigation }: any) => {
         }
     };
 
-    // Course Rename
+    // Rename Course
     const handleSaveRename = () => {
         if (!courseActionTarget || !renameTitleInput.trim()) return;
         const updated = courses.map((c) =>
@@ -543,7 +584,7 @@ const LibraryScreen = ({ navigation }: any) => {
         }
         setIsRenameModalOpen(false);
         setIsActionSheetOpen(false);
-        setToastMessage(`Course renamed to "${renameTitleInput.trim()}"`);
+        setToastMessage(`Renamed to "${renameTitleInput.trim()}"`);
     };
 
     // Add Subject to existing course
@@ -553,7 +594,7 @@ const LibraryScreen = ({ navigation }: any) => {
             id: `sub_${Date.now()}`,
             name: addSubjectNameInput.trim(),
             code: `${addSubjectNameInput.trim().slice(0, 3).toUpperCase()}-101`,
-            color: '#0F6B5C',
+            color: '#0D9488',
             documents: [],
             mastery_percentage: 0,
             vocab_count: 0,
@@ -576,35 +617,42 @@ const LibraryScreen = ({ navigation }: any) => {
     };
 
     // Render single course card
-    const renderCourseCard = ({ item }: { item: CourseItem }) => {
+    const renderCourseCard = ({ item, index }: { item: CourseItem; index: number }) => {
         if (!item) return null;
         const totalDocs = (item.subjects || []).reduce((sum, s) => sum + (s?.documents || []).length, 0);
         const progress = item.overall_progress_percentage || 0;
+        const coverGrad = gradients.cardCoverGradients[index % gradients.cardCoverGradients.length];
 
         return (
-            <TouchableOpacity
+            <AnimatedPressable
                 style={[
                     viewLayout === 'grid' ? styles.gridCard : styles.listCard,
                     shadows.card,
                 ]}
                 onPress={() => setActiveCourseNav(item)}
-                activeOpacity={0.75}
+                scaleTo={0.97}
+                hapticFeedback={true}
+                hapticType="selection"
                 accessibilityRole="button"
                 accessibilityLabel={`Course: ${item.title}`}
             >
+                {/* Colored Top Accent Bar */}
+                <View style={[styles.cardAccentBar, { backgroundColor: coverGrad[0] }]} />
+
                 <View style={styles.cardHeader}>
                     <View style={styles.cardTitleContainer}>
+                        <View style={styles.courseBadgeRow}>
+                            <View style={[styles.courseColorDot, { backgroundColor: coverGrad[0] }]} />
+                            <Text style={styles.courseTarget} numberOfLines={1}>
+                                {item.target_exam_or_degree || 'General Track'}
+                            </Text>
+                        </View>
                         <Text style={styles.courseTitle} numberOfLines={2}>
                             {item.title}
                         </Text>
-                        {item.target_exam_or_degree ? (
-                            <Text style={styles.courseTarget} numberOfLines={1}>
-                                {item.target_exam_or_degree}
-                            </Text>
-                        ) : null}
                     </View>
 
-                    <TouchableOpacity
+                    <AnimatedPressable
                         style={styles.moreBtn}
                         onPress={() => {
                             setCourseActionTarget(item);
@@ -612,23 +660,47 @@ const LibraryScreen = ({ navigation }: any) => {
                         }}
                         accessibilityLabel="Course options"
                     >
-                        <MoreVertical size={18} color={colors.textMuted} strokeWidth={1.5} />
-                    </TouchableOpacity>
+                        <MoreVertical size={18} color={colors.textMuted} strokeWidth={1.75} />
+                    </AnimatedPressable>
+                </View>
+
+                {/* Subject Pills list */}
+                <View style={styles.subjectPillRow}>
+                    {(item.subjects || []).slice(0, 2).map((s) => (
+                        <View key={s.id} style={[styles.subChip, { backgroundColor: colors.surfaceRaised }]}>
+                            <Text style={[styles.subChipText, { color: colors.textSecondary }]} numberOfLines={1}>
+                                {s.name}
+                            </Text>
+                        </View>
+                    ))}
+                    {(item.subjects || []).length > 2 && (
+                        <View style={[styles.subChip, { backgroundColor: colors.surfaceRaised }]}>
+                            <Text style={[styles.subChipText, { color: colors.textMuted }]}>
+                                +{(item.subjects || []).length - 2}
+                            </Text>
+                        </View>
+                    )}
                 </View>
 
                 <View style={styles.cardFooter}>
                     <View style={styles.statsRow}>
                         <Text style={styles.statsText}>
-                            {(item.subjects || []).length} {(item.subjects || []).length === 1 ? 'subject' : 'subjects'} · {totalDocs} {totalDocs === 1 ? 'PDF' : 'PDFs'}
+                            {(item.subjects || []).length} subjects · {totalDocs} PDFs
                         </Text>
                     </View>
-                    <ProgressRing percentage={progress} size={32} strokeWidth={3} showLabel={false} />
+                    <ProgressRing
+                        percentage={progress}
+                        size={36}
+                        strokeWidth={3.5}
+                        showLabel={true}
+                        gradientColors={gradients.tealToBlue[isDark ? 'dark' : 'light']}
+                    />
                 </View>
-            </TouchableOpacity>
+            </AnimatedPressable>
         );
     };
 
-    // Render Detailed Subjects Hierarchy for Selected Course
+    // Render Detailed Subjects Drilldown
     const renderCourseSubjectDrilldown = (course: CourseItem) => {
         if (!course) return null;
         const subjectList = course.subjects || [];
@@ -636,35 +708,35 @@ const LibraryScreen = ({ navigation }: any) => {
         return (
             <ScrollView
                 style={styles.drilldownContainer}
-                contentContainerStyle={{ paddingBottom: 100 }}
+                contentContainerStyle={{ paddingBottom: 110 }}
                 showsVerticalScrollIndicator={false}
             >
                 <View style={styles.drilldownHeader}>
-                    <TouchableOpacity
+                    <AnimatedPressable
                         style={styles.backBtn}
                         onPress={() => setActiveCourseNav(null)}
                         accessibilityRole="button"
                         accessibilityLabel="Back to courses list"
                     >
-                        <ArrowLeft size={20} color={colors.text} strokeWidth={1.5} />
-                    </TouchableOpacity>
+                        <ArrowLeft size={20} color={colors.text} strokeWidth={2} />
+                    </AnimatedPressable>
                     <View style={{ flex: 1 }}>
                         <Text style={styles.drilldownTitle}>{course.title}</Text>
                         <Text style={styles.drilldownSubtitle}>
-                            {subjectList.length} subjects · Tap subject to view PDFs
+                            {subjectList.length} subjects · Tap a subject to review PDFs
                         </Text>
                     </View>
-                    <TouchableOpacity
-                        style={styles.drilldownAddBtn}
+                    <AnimatedPressable
+                        style={[styles.drilldownAddBtn, { backgroundColor: colors.primaryMuted }]}
                         onPress={() => {
                             setCourseActionTarget(course);
                             setIsAddSubjectModalOpen(true);
                         }}
                         accessibilityRole="button"
                     >
-                        <Plus size={16} color={colors.accent} strokeWidth={1.5} />
-                        <Text style={[styles.drilldownAddText, { color: colors.accent }]}>Subject</Text>
-                    </TouchableOpacity>
+                        <Plus size={15} color={colors.primary} strokeWidth={2.2} />
+                        <Text style={[styles.drilldownAddText, { color: colors.primary }]}>Subject</Text>
+                    </AnimatedPressable>
                 </View>
 
                 {subjectList.length === 0 ? (
@@ -679,9 +751,10 @@ const LibraryScreen = ({ navigation }: any) => {
                         }}
                     />
                 ) : (
-                    subjectList.map((subject) => {
+                    subjectList.map((subject, idx) => {
                         const isExpanded = expandedSubjectId === subject.id;
                         const docList = subject.documents || [];
+                        const subColor = subject.color || ['#0D9488', '#2F6FED', '#F2644A'][idx % 3];
 
                         return (
                             <View key={subject.id} style={[styles.subjectRowCard, shadows.card]}>
@@ -691,15 +764,15 @@ const LibraryScreen = ({ navigation }: any) => {
                                     activeOpacity={0.7}
                                     accessibilityRole="button"
                                 >
-                                    <View style={[styles.subjectColorBar, { backgroundColor: subject.color || colors.accent }]} />
+                                    <View style={[styles.subjectColorBar, { backgroundColor: subColor }]} />
                                     <View style={{ flex: 1, paddingLeft: 12 }}>
                                         <Text style={styles.subjectName}>{subject.name}</Text>
                                         <Text style={styles.subjectMeta}>
-                                            {docList.length} {docList.length === 1 ? 'document' : 'documents'}
+                                            {docList.length} {docList.length === 1 ? 'PDF document' : 'PDF documents'}
                                         </Text>
                                     </View>
-                                    <TouchableOpacity
-                                        style={{ padding: 6, marginRight: 6 }}
+                                    <AnimatedPressable
+                                        style={{ padding: 6, marginRight: 4 }}
                                         onPress={() =>
                                             setDeleteConfirmTarget({
                                                 type: 'subject',
@@ -708,12 +781,12 @@ const LibraryScreen = ({ navigation }: any) => {
                                         }
                                         accessibilityLabel={`Delete subject ${subject.name}`}
                                     >
-                                        <Trash2 size={15} color={colors.textMuted} strokeWidth={1.5} />
-                                    </TouchableOpacity>
+                                        <Trash2 size={16} color={colors.textMuted} strokeWidth={1.75} />
+                                    </AnimatedPressable>
                                     {isExpanded ? (
-                                        <ChevronDown size={18} color={colors.textMuted} strokeWidth={1.5} />
+                                        <ChevronDown size={18} color={colors.textMuted} strokeWidth={2} />
                                     ) : (
-                                        <ChevronRight size={18} color={colors.textMuted} strokeWidth={1.5} />
+                                        <ChevronRight size={18} color={colors.textMuted} strokeWidth={2} />
                                     )}
                                 </TouchableOpacity>
 
@@ -721,29 +794,30 @@ const LibraryScreen = ({ navigation }: any) => {
                                     <View style={styles.subjectDocsContainer}>
                                         {docList.length === 0 ? (
                                             <View style={styles.emptySubjectDocs}>
-                                                <Text style={styles.emptyDocsText}>No PDFs in this subject yet.</Text>
+                                                <Text style={styles.emptyDocsText}>No PDFs attached to this subject track yet.</Text>
                                             </View>
                                         ) : (
                                             docList.map((doc) => (
-                                                <TouchableOpacity
+                                                <AnimatedPressable
                                                     key={doc.id}
                                                     style={styles.docItemRow}
                                                     onPress={() => handleOpenDocument(course, subject, doc)}
-                                                    activeOpacity={0.7}
                                                     accessibilityRole="button"
                                                     accessibilityLabel={`Open ${doc.filename} in Course Hub`}
                                                 >
-                                                    <FileText size={18} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 10 }} />
-                                                    <View style={{ flex: 1 }}>
+                                                    <View style={[styles.docIconWrapper, { backgroundColor: colors.primaryMuted }]}>
+                                                        <FileText size={18} color={colors.primary} strokeWidth={2} />
+                                                    </View>
+                                                    <View style={{ flex: 1, marginLeft: 12 }}>
                                                         <Text style={styles.docFileName} numberOfLines={1}>
                                                             {doc.filename}
                                                         </Text>
                                                         <Text style={styles.docFileSize}>
-                                                            {formatFileSize(doc.size_bytes)} · Ready
+                                                            {formatFileSize(doc.size_bytes)} · Ready to study
                                                         </Text>
                                                     </View>
-                                                    <ChevronRight size={16} color={colors.textMuted} strokeWidth={1.5} />
-                                                </TouchableOpacity>
+                                                    <ChevronRight size={16} color={colors.textMuted} strokeWidth={2} />
+                                                </AnimatedPressable>
                                             ))
                                         )}
                                     </View>
@@ -760,62 +834,74 @@ const LibraryScreen = ({ navigation }: any) => {
         <View style={styles.container}>
             <OfflineBanner visible={isOffline} />
 
-            {/* Main Top Header */}
+            {/* Gradient Hero Header */}
             {!activeCourseNav && (
-                <View style={styles.topBar}>
-                    <View style={styles.topBarLeft}>
-                        <Text style={styles.headerTitle}>Library</Text>
+                <GradientView
+                    colors={gradients.tealToBlue[isDark ? 'dark' : 'light']}
+                    style={styles.heroHeader}
+                >
+                    <View style={styles.heroTopRow}>
+                        <View style={styles.heroGreetingBlock}>
+                            <View style={styles.streakBadge}>
+                                <Flame size={14} color="#FFC857" strokeWidth={2.5} />
+                                <Text style={styles.streakText}>4-Day Streak</Text>
+                            </View>
+                            <Text style={styles.heroGreeting}>Welcome Back</Text>
+                            <Text style={styles.heroSub}>Keep mastering your course material</Text>
+                        </View>
+
+                        {/* Progress ring in hero */}
+                        <View style={styles.heroProgressBlock}>
+                            <ProgressRing
+                                percentage={overallStudyProgress}
+                                size={52}
+                                strokeWidth={4.5}
+                                showLabel={true}
+                                color="#FFFFFF"
+                                labelColor="#FFFFFF"
+                            />
+                            <Text style={styles.heroProgressLabel}>Curriculum</Text>
+                        </View>
+                    </View>
+                </GradientView>
+            )}
+
+            {/* Main Top Bar & Search */}
+            {!activeCourseNav && (
+                <View style={styles.controlsBar}>
+                    <View style={styles.searchContainer}>
+                        <Search size={16} color={colors.textMuted} strokeWidth={2} style={styles.searchIcon} />
+                        <TextInput
+                            style={styles.searchInput}
+                            placeholder="Search courses, subjects, or PDFs..."
+                            placeholderTextColor={colors.textMuted}
+                            value={searchQuery}
+                            onChangeText={setSearchQuery}
+                            clearButtonMode="while-editing"
+                        />
+                        {searchQuery.length > 0 && (
+                            <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearBtn}>
+                                <X size={15} color={colors.textMuted} />
+                            </TouchableOpacity>
+                        )}
                     </View>
 
-                    <View style={styles.topBarActions}>
-                        <TouchableOpacity
-                            style={styles.layoutToggleBtn}
-                            onPress={() => setViewLayout(viewLayout === 'grid' ? 'list' : 'grid')}
-                            accessibilityRole="button"
-                            accessibilityLabel={`Switch to ${viewLayout === 'grid' ? 'list' : 'grid'} view`}
-                        >
-                            {viewLayout === 'grid' ? (
-                                <List size={18} color={colors.textSecondary} strokeWidth={1.5} />
-                            ) : (
-                                <LayoutGrid size={18} color={colors.textSecondary} strokeWidth={1.5} />
-                            )}
-                        </TouchableOpacity>
-
-                        <TouchableOpacity
-                            style={styles.primaryAddBtn}
-                            onPress={() => setIsAddCourseModalOpen(true)}
-                            activeOpacity={0.8}
-                            accessibilityRole="button"
-                            accessibilityLabel="Add course"
-                        >
-                            <Plus size={16} color={colors.textInverse} strokeWidth={2} style={{ marginRight: 4 }} />
-                            <Text style={styles.primaryAddBtnText}>Add course</Text>
-                        </TouchableOpacity>
-                    </View>
+                    <AnimatedPressable
+                        style={styles.layoutToggleBtn}
+                        onPress={() => setViewLayout(viewLayout === 'grid' ? 'list' : 'grid')}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Switch to ${viewLayout === 'grid' ? 'list' : 'grid'} view`}
+                    >
+                        {viewLayout === 'grid' ? (
+                            <List size={18} color={colors.textSecondary} strokeWidth={2} />
+                        ) : (
+                            <LayoutGrid size={18} color={colors.textSecondary} strokeWidth={2} />
+                        )}
+                    </AnimatedPressable>
                 </View>
             )}
 
-            {/* Search Bar */}
-            {!activeCourseNav && (
-                <View style={styles.searchContainer}>
-                    <Search size={16} color={colors.textMuted} strokeWidth={1.5} style={styles.searchIcon} />
-                    <TextInput
-                        style={styles.searchInput}
-                        placeholder="Search courses, subjects, or PDFs..."
-                        placeholderTextColor={colors.textMuted}
-                        value={searchQuery}
-                        onChangeText={setSearchQuery}
-                        clearButtonMode="while-editing"
-                    />
-                    {searchQuery.length > 0 && (
-                        <TouchableOpacity onPress={() => setSearchQuery('')} style={styles.searchClearBtn}>
-                            <X size={14} color={colors.textMuted} />
-                        </TouchableOpacity>
-                    )}
-                </View>
-            )}
-
-            {/* Main Course List or Drilldown View */}
+            {/* Main Course List */}
             <View style={{ flex: 1 }}>
                 {activeCourseNav ? (
                     renderCourseSubjectDrilldown(activeCourseNav)
@@ -827,8 +913,8 @@ const LibraryScreen = ({ navigation }: any) => {
                 ) : filteredCourses.length === 0 ? (
                     <EmptyState
                         icon={BookOpen}
-                        title="No courses yet"
-                        description="Add a course to get summaries, key words, quizzes, and a tutor that answers from your notes."
+                        title="No courses in library"
+                        description="Create a course with multiple subjects and attach PDFs to get AI summaries, vocabulary, quizzes, and a tutor grounded in your material."
                         actionLabel="Add Course"
                         actionIcon={Plus}
                         onAction={() => setIsAddCourseModalOpen(true)}
@@ -842,6 +928,8 @@ const LibraryScreen = ({ navigation }: any) => {
                         renderItem={renderCourseCard}
                         contentContainerStyle={styles.listContent}
                         showsVerticalScrollIndicator={false}
+                        onScroll={handleScroll}
+                        scrollEventThrottle={16}
                         refreshControl={
                             <RefreshControl
                                 refreshing={refreshing}
@@ -849,14 +937,29 @@ const LibraryScreen = ({ navigation }: any) => {
                                     setRefreshing(true);
                                     loadCourses();
                                 }}
-                                tintColor={colors.accent}
+                                tintColor={colors.primary}
                             />
                         }
                     />
                 )}
             </View>
 
-            {/* Full-screen Staged Course Ingestion Modal (Signature Moment) */}
+            {/* Prominent Floating Add Course Button (Hides on scroll down) */}
+            {!activeCourseNav && isFabVisible && (
+                <AnimatedPressable
+                    style={[styles.floatingAddFab, shadows.glowAccent]}
+                    onPress={() => setIsAddCourseModalOpen(true)}
+                    hapticFeedback={true}
+                    hapticType="selection"
+                    accessibilityRole="button"
+                    accessibilityLabel="Add Course"
+                >
+                    <Plus size={20} color="#FFFFFF" strokeWidth={2.5} style={{ marginRight: 6 }} />
+                    <Text style={styles.fabText}>Add Course</Text>
+                </AnimatedPressable>
+            )}
+
+            {/* Staged Course Ingestion Modal (The Signature Moment) */}
             <Modal
                 visible={isIngesting}
                 animationType="slide"
@@ -865,21 +968,24 @@ const LibraryScreen = ({ navigation }: any) => {
             >
                 <View style={styles.ingestionModalContainer}>
                     <View style={styles.ingestionModalHeader}>
-                        <Text style={styles.ingestionModalTitle}>Ingesting Course Material</Text>
-                        <TouchableOpacity
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Sparkles size={22} color={colors.primary} strokeWidth={2} style={{ marginRight: 10 }} />
+                            <Text style={styles.ingestionModalTitle}>Ingesting Course Material</Text>
+                        </View>
+                        <AnimatedPressable
                             onPress={() => setIsIngesting(false)}
                             style={styles.closeBtn}
                             accessibilityLabel="Close ingestion sheet"
                         >
                             <X size={20} color={colors.textMuted} />
-                        </TouchableOpacity>
+                        </AnimatedPressable>
                     </View>
 
                     <Text style={styles.ingestionModalDescription}>
-                        Your course material is being read and indexed into the local vector store. Ready subjects can be opened immediately.
+                        Your documents are being read and indexed into the local vector database. Ready subjects become tappable immediately while others finish.
                     </Text>
 
-                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }}>
+                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
                         {ingestionSubjects.map((sub) => {
                             const isReady = sub.stage === 'ready';
                             const isFailed = sub.stage === 'failed';
@@ -892,6 +998,23 @@ const LibraryScreen = ({ navigation }: any) => {
                                             {sub.fileName}
                                         </Text>
 
+                                        {/* Animated Progress Bar */}
+                                        <View style={styles.stageProgressBarBg}>
+                                            <View
+                                                style={[
+                                                    styles.stageProgressBarFill,
+                                                    {
+                                                        width: `${sub.progressPct}%`,
+                                                        backgroundColor: isReady
+                                                            ? colors.success
+                                                            : isFailed
+                                                            ? colors.danger
+                                                            : colors.primary,
+                                                    },
+                                                ]}
+                                            />
+                                        </View>
+
                                         <View style={styles.stageIndicatorRow}>
                                             <Text
                                                 style={[
@@ -900,10 +1023,10 @@ const LibraryScreen = ({ navigation }: any) => {
                                                     isFailed && { color: colors.danger },
                                                 ]}
                                             >
-                                                {sub.stage === 'uploading' && 'Uploading...'}
-                                                {sub.stage === 'reading' && 'Reading pages...'}
-                                                {sub.stage === 'indexing' && 'Building search index...'}
-                                                {sub.stage === 'ready' && 'Ready'}
+                                                {sub.stage === 'uploading' && '1/4 Uploading file...'}
+                                                {sub.stage === 'reading' && '2/4 Reading pages...'}
+                                                {sub.stage === 'indexing' && '3/4 Building vector index...'}
+                                                {sub.stage === 'ready' && '4/4 Ready'}
                                                 {sub.stage === 'failed' && (sub.error || 'Failed')}
                                             </Text>
                                         </View>
@@ -911,14 +1034,16 @@ const LibraryScreen = ({ navigation }: any) => {
 
                                     <View style={styles.ingestionRowRight}>
                                         {isReady ? (
-                                            <CheckCircle2 size={24} color={colors.success} strokeWidth={2} />
+                                            <View style={[styles.checkCircleWrapper, { backgroundColor: colors.successMuted }]}>
+                                                <CheckCircle2 size={24} color={colors.success} strokeWidth={2.2} />
+                                            </View>
                                         ) : isFailed ? (
-                                            <TouchableOpacity style={styles.retryBtn}>
-                                                <RotateCcw size={16} color={colors.danger} />
+                                            <AnimatedPressable style={[styles.retryBtn, { borderColor: colors.dangerMuted }]}>
+                                                <RotateCcw size={15} color={colors.danger} strokeWidth={2} />
                                                 <Text style={[styles.retryText, { color: colors.danger }]}>Retry</Text>
-                                            </TouchableOpacity>
+                                            </AnimatedPressable>
                                         ) : (
-                                            <ActivityIndicator size="small" color={colors.accent} />
+                                            <ActivityIndicator size="small" color={colors.primary} />
                                         )}
                                     </View>
                                 </View>
@@ -926,16 +1051,16 @@ const LibraryScreen = ({ navigation }: any) => {
                         })}
                     </ScrollView>
 
-                    <TouchableOpacity
-                        style={[styles.doneIngestBtn, { backgroundColor: colors.accent }]}
+                    <AnimatedPressable
+                        style={[styles.doneIngestBtn, { backgroundColor: colors.primary }]}
                         onPress={() => setIsIngesting(false)}
                     >
                         <Text style={[styles.doneIngestText, { color: colors.textInverse }]}>Done & Open Library</Text>
-                    </TouchableOpacity>
+                    </AnimatedPressable>
                 </View>
             </Modal>
 
-            {/* Course Upload Flow Wizard Modal (Full Screen Sheet on Mobile) */}
+            {/* Course Upload Flow Wizard Modal */}
             <Modal
                 visible={isAddCourseModalOpen}
                 animationType="slide"
@@ -945,20 +1070,20 @@ const LibraryScreen = ({ navigation }: any) => {
                 <View style={styles.modalSheetContainer}>
                     <View style={styles.modalSheetHeader}>
                         <Text style={styles.modalSheetTitle}>Create New Course</Text>
-                        <TouchableOpacity
+                        <AnimatedPressable
                             onPress={() => setIsAddCourseModalOpen(false)}
                             style={styles.closeBtn}
                             accessibilityLabel="Cancel course creation"
                         >
-                            <X size={20} color={colors.textMuted} />
-                        </TouchableOpacity>
+                            <X size={20} color={colors.textMuted} strokeWidth={2} />
+                        </AnimatedPressable>
                     </View>
 
-                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }}>
+                    <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 24 }} showsVerticalScrollIndicator={false}>
                         <Text style={styles.fieldLabel}>Course Name</Text>
                         <TextInput
                             style={styles.textInput}
-                            placeholder="e.g. MDCAT Pre-Medical Biology 2026"
+                            placeholder="e.g. MCAT Biology & Chemistry 2026"
                             placeholderTextColor={colors.textMuted}
                             value={newCourseTitle}
                             onChangeText={setNewCourseTitle}
@@ -967,19 +1092,37 @@ const LibraryScreen = ({ navigation }: any) => {
                         <Text style={styles.fieldLabel}>Target Exam or Degree (Optional)</Text>
                         <TextInput
                             style={styles.textInput}
-                            placeholder="e.g. Medical Entrance / PMDC"
+                            placeholder="e.g. Medical Entrance Examination"
                             placeholderTextColor={colors.textMuted}
                             value={newCourseTarget}
                             onChangeText={setNewCourseTarget}
                         />
 
-                        <Text style={[styles.fieldLabel, { marginTop: 12 }]}>Subjects & PDFs</Text>
+                        <Text style={[styles.fieldLabel, { marginTop: 14 }]}>Subjects & Attached Documents</Text>
                         <Text style={styles.fieldHelper}>
-                            Define subjects and attach PDFs to each. You can add more documents anytime.
+                            Define your subject tracks and attach PDFs. You can add more documents anytime.
                         </Text>
 
+                        {/* Breathing Upload Dropzone */}
+                        <Animated.View
+                            style={[
+                                styles.breathingDropzone,
+                                {
+                                    backgroundColor: colors.surfaceRaised,
+                                    borderColor: colors.primary,
+                                    transform: [{ scale: breatheAnim }],
+                                },
+                            ]}
+                        >
+                            <UploadCloud size={32} color={colors.primary} strokeWidth={1.75} style={{ marginBottom: 6 }} />
+                            <Text style={[styles.dropzoneTitle, { color: colors.text }]}>Add Subject Tracks & PDFs</Text>
+                            <Text style={[styles.dropzoneSub, { color: colors.textMuted }]}>
+                                Upload PDFs up to 25MB per document
+                            </Text>
+                        </Animated.View>
+
                         {subjectDrafts.map((draft, idx) => (
-                            <View key={draft.id} style={styles.subjectDraftCard}>
+                            <View key={draft.id} style={[styles.subjectDraftCard, shadows.subtle]}>
                                 <View style={styles.subjectDraftHeader}>
                                     <TextInput
                                         style={styles.subjectDraftInput}
@@ -993,14 +1136,14 @@ const LibraryScreen = ({ navigation }: any) => {
                                         }}
                                     />
                                     {subjectDrafts.length > 1 && (
-                                        <TouchableOpacity
+                                        <AnimatedPressable
                                             onPress={() => {
                                                 setSubjectDrafts((prev) => prev.filter((s) => s.id !== draft.id));
                                             }}
                                             style={styles.removeDraftBtn}
                                         >
-                                            <Trash2 size={16} color={colors.danger} strokeWidth={1.5} />
-                                        </TouchableOpacity>
+                                            <Trash2 size={16} color={colors.danger} strokeWidth={1.75} />
+                                        </AnimatedPressable>
                                     )}
                                 </View>
 
@@ -1008,28 +1151,27 @@ const LibraryScreen = ({ navigation }: any) => {
                                     <View style={styles.draftFilesList}>
                                         {draft.files.map((f, fIdx) => (
                                             <View key={fIdx} style={styles.draftFileChip}>
-                                                <FileText size={14} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 6 }} />
+                                                <FileText size={14} color={colors.primary} strokeWidth={2} style={{ marginRight: 6 }} />
                                                 <Text style={styles.draftFileName} numberOfLines={1}>{f.name}</Text>
                                             </View>
                                         ))}
                                     </View>
                                 )}
 
-                                <TouchableOpacity
-                                    style={styles.addPdfToSubjectBtn}
+                                <AnimatedPressable
+                                    style={[styles.addPdfToSubjectBtn, { backgroundColor: colors.surface }]}
                                     onPress={() => handlePickFilesForSubject(draft.id)}
-                                    activeOpacity={0.7}
                                 >
-                                    <UploadCloud size={15} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 6 }} />
-                                    <Text style={[styles.addPdfText, { color: colors.accent }]}>
-                                        {draft.files.length > 0 ? 'Add more PDFs' : 'Drop or Select PDFs'}
+                                    <UploadCloud size={15} color={colors.primary} strokeWidth={2} style={{ marginRight: 6 }} />
+                                    <Text style={[styles.addPdfText, { color: colors.primary }]}>
+                                        {draft.files.length > 0 ? 'Attach more PDFs' : 'Choose or Select PDFs'}
                                     </Text>
-                                </TouchableOpacity>
+                                </AnimatedPressable>
                             </View>
                         ))}
 
-                        <TouchableOpacity
-                            style={styles.addNewSubjectDraftBtn}
+                        <AnimatedPressable
+                            style={[styles.addNewSubjectDraftBtn, { borderColor: colors.border }]}
                             onPress={() => {
                                 setSubjectDrafts((prev) => [
                                     ...prev,
@@ -1037,20 +1179,19 @@ const LibraryScreen = ({ navigation }: any) => {
                                 ]);
                             }}
                         >
-                            <Plus size={16} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 6 }} />
-                            <Text style={[styles.addNewSubjectDraftText, { color: colors.accent }]}>Add Another Subject</Text>
-                        </TouchableOpacity>
+                            <Plus size={16} color={colors.primary} strokeWidth={2} style={{ marginRight: 6 }} />
+                            <Text style={[styles.addNewSubjectDraftText, { color: colors.primary }]}>Add Another Subject Track</Text>
+                        </AnimatedPressable>
                     </ScrollView>
 
-                    <TouchableOpacity
-                        style={[styles.createCourseSubmitBtn, { backgroundColor: colors.accent }]}
+                    <AnimatedPressable
+                        style={[styles.createCourseSubmitBtn, { backgroundColor: colors.primary }, shadows.glowAccent]}
                         onPress={handleStartCourseIngestion}
-                        activeOpacity={0.85}
                     >
                         <Text style={[styles.createCourseSubmitText, { color: colors.textInverse }]}>
-                            Create Course & Process Material
+                            Create Course & Ingest Material
                         </Text>
-                    </TouchableOpacity>
+                    </AnimatedPressable>
                 </View>
             </Modal>
 
@@ -1078,7 +1219,7 @@ const LibraryScreen = ({ navigation }: any) => {
                                 setIsRenameModalOpen(true);
                             }}
                         >
-                            <Edit3 size={18} color={colors.text} strokeWidth={1.5} style={{ marginRight: 12 }} />
+                            <Edit3 size={18} color={colors.text} strokeWidth={1.75} style={{ marginRight: 12 }} />
                             <Text style={styles.actionSheetOptionText}>Rename Course</Text>
                         </TouchableOpacity>
 
@@ -1089,7 +1230,7 @@ const LibraryScreen = ({ navigation }: any) => {
                                 setIsAddSubjectModalOpen(true);
                             }}
                         >
-                            <FolderPlus size={18} color={colors.text} strokeWidth={1.5} style={{ marginRight: 12 }} />
+                            <FolderPlus size={18} color={colors.text} strokeWidth={1.75} style={{ marginRight: 12 }} />
                             <Text style={styles.actionSheetOptionText}>Add Subject Track</Text>
                         </TouchableOpacity>
 
@@ -1101,7 +1242,7 @@ const LibraryScreen = ({ navigation }: any) => {
                                 }
                             }}
                         >
-                            <Trash2 size={18} color={colors.danger} strokeWidth={1.5} style={{ marginRight: 12 }} />
+                            <Trash2 size={18} color={colors.danger} strokeWidth={1.75} style={{ marginRight: 12 }} />
                             <Text style={[styles.actionSheetOptionText, { color: colors.danger }]}>Delete Course</Text>
                         </TouchableOpacity>
                     </View>
@@ -1125,18 +1266,18 @@ const LibraryScreen = ({ navigation }: any) => {
                             autoFocus
                         />
                         <View style={styles.dialogActions}>
-                            <TouchableOpacity
+                            <AnimatedPressable
                                 style={styles.cancelDialogBtn}
                                 onPress={() => setIsRenameModalOpen(false)}
                             >
                                 <Text style={styles.cancelDialogText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.confirmDialogBtn, { backgroundColor: colors.accent }]}
+                            </AnimatedPressable>
+                            <AnimatedPressable
+                                style={[styles.confirmDialogBtn, { backgroundColor: colors.primary }]}
                                 onPress={handleSaveRename}
                             >
                                 <Text style={[styles.confirmDialogText, { color: colors.textInverse }]}>Save</Text>
-                            </TouchableOpacity>
+                            </AnimatedPressable>
                         </View>
                     </View>
                 </View>
@@ -1151,28 +1292,28 @@ const LibraryScreen = ({ navigation }: any) => {
             >
                 <View style={styles.modalOverlay}>
                     <View style={[styles.dialogCard, shadows.modal]}>
-                        <Text style={styles.dialogTitle}>Add Subject to Course</Text>
+                        <Text style={styles.dialogTitle}>Add Subject Track</Text>
                         <TextInput
                             style={styles.textInput}
-                            placeholder="e.g. Molecular Physics"
+                            placeholder="e.g. Molecular Genetics"
                             placeholderTextColor={colors.textMuted}
                             value={addSubjectNameInput}
                             onChangeText={setAddSubjectNameInput}
                             autoFocus
                         />
                         <View style={styles.dialogActions}>
-                            <TouchableOpacity
+                            <AnimatedPressable
                                 style={styles.cancelDialogBtn}
                                 onPress={() => setIsAddSubjectModalOpen(false)}
                             >
                                 <Text style={styles.cancelDialogText}>Cancel</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                                style={[styles.confirmDialogBtn, { backgroundColor: colors.accent }]}
+                            </AnimatedPressable>
+                            <AnimatedPressable
+                                style={[styles.confirmDialogBtn, { backgroundColor: colors.primary }]}
                                 onPress={handleSaveNewSubject}
                             >
-                                <Text style={[styles.confirmDialogText, { color: colors.textInverse }]}>Add Subject</Text>
-                            </TouchableOpacity>
+                                <Text style={[styles.confirmDialogText, { color: colors.textInverse }]}>Add</Text>
+                            </AnimatedPressable>
                         </View>
                     </View>
                 </View>
@@ -1207,70 +1348,88 @@ const LibraryScreen = ({ navigation }: any) => {
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, shadows: any) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
         },
-        topBar: {
+        heroHeader: {
+            paddingTop: Platform.OS === 'ios' ? 52 : 24,
+            paddingBottom: 22,
+            paddingHorizontal: 20,
+            borderBottomLeftRadius: radii.cards + 4,
+            borderBottomRightRadius: radii.cards + 4,
+        },
+        heroTopRow: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingHorizontal: 16,
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
-            paddingBottom: 12,
-            backgroundColor: colors.bg,
         },
-        topBarLeft: {
+        heroGreetingBlock: {
             flex: 1,
+            paddingRight: 12,
         },
-        headerTitle: {
-            fontSize: 22,
-            fontWeight: '700',
-            color: colors.text,
-            letterSpacing: -0.3,
-        },
-        topBarActions: {
+        streakBadge: {
             flexDirection: 'row',
             alignItems: 'center',
-            gap: 8,
+            backgroundColor: 'rgba(0, 0, 0, 0.25)',
+            paddingVertical: 4,
+            paddingHorizontal: 10,
+            borderRadius: radii.full,
+            alignSelf: 'flex-start',
+            marginBottom: 6,
         },
-        layoutToggleBtn: {
-            width: 36,
-            height: 36,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
+        streakText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+            marginLeft: 5,
+        },
+        heroGreeting: {
+            fontSize: 24,
+            fontWeight: '800',
+            color: '#FFFFFF',
+            letterSpacing: -0.4,
+        },
+        heroSub: {
+            fontSize: typography.sizes.xs + 1,
+            color: 'rgba(255, 255, 255, 0.85)',
+            marginTop: 2,
+        },
+        heroProgressBlock: {
             alignItems: 'center',
             justifyContent: 'center',
-            backgroundColor: colors.surface,
+            backgroundColor: 'rgba(255, 255, 255, 0.15)',
+            padding: 10,
+            borderRadius: radii.cards,
         },
-        primaryAddBtn: {
+        heroProgressLabel: {
+            fontSize: typography.sizes.xs - 1,
+            color: '#FFFFFF',
+            fontWeight: '700',
+            marginTop: 4,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+        },
+        controlsBar: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.accent,
-            paddingVertical: 8,
-            paddingHorizontal: 14,
-            borderRadius: radii.sm,
-            height: 36,
-        },
-        primaryAddBtnText: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
-            color: colors.textInverse,
+            paddingHorizontal: 16,
+            paddingTop: 14,
+            paddingBottom: 6,
+            gap: 10,
         },
         searchContainer: {
+            flex: 1,
             flexDirection: 'row',
             alignItems: 'center',
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.border,
-            borderRadius: radii.sm,
-            marginHorizontal: 16,
-            marginBottom: 12,
+            borderRadius: radii.controls,
             paddingHorizontal: 12,
-            height: 40,
+            height: 42,
         },
         searchIcon: {
             marginRight: 8,
@@ -1284,61 +1443,114 @@ const createStyles = (colors: ThemeColors) =>
         searchClearBtn: {
             padding: 4,
         },
+        layoutToggleBtn: {
+            width: 42,
+            height: 42,
+            borderRadius: radii.controls,
+            borderWidth: 1,
+            borderColor: colors.border,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: colors.surface,
+        },
         listContent: {
             paddingHorizontal: 12,
-            paddingBottom: 90,
+            paddingTop: 8,
+            paddingBottom: 110,
         },
         gridCard: {
             flex: 1,
             margin: 6,
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 14,
-            minHeight: 130,
+            minHeight: 160,
             justifyContent: 'space-between',
+            overflow: 'hidden',
         },
         listCard: {
             marginHorizontal: 4,
             marginVertical: 6,
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 16,
-            minHeight: 90,
             justifyContent: 'space-between',
+            overflow: 'hidden',
+        },
+        cardAccentBar: {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            height: 4,
         },
         cardHeader: {
             flexDirection: 'row',
-            alignItems: 'flex-start',
             justifyContent: 'space-between',
+            alignItems: 'flex-start',
+            marginTop: 4,
         },
         cardTitleContainer: {
             flex: 1,
-            paddingRight: 6,
+            paddingRight: 8,
         },
-        courseTitle: {
-            fontSize: typography.sizes.md,
-            fontWeight: '600',
-            color: colors.text,
-            lineHeight: 20,
+        courseBadgeRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
             marginBottom: 4,
+        },
+        courseColorDot: {
+            width: 7,
+            height: 7,
+            borderRadius: 3.5,
+            marginRight: 6,
         },
         courseTarget: {
             fontSize: typography.sizes.xs,
+            fontWeight: '600',
             color: colors.textMuted,
-            fontWeight: '500',
+            letterSpacing: 0.1,
+        },
+        courseTitle: {
+            fontSize: typography.sizes.md,
+            fontWeight: '700',
+            color: colors.text,
+            lineHeight: 20,
+            letterSpacing: -0.2,
         },
         moreBtn: {
             padding: 4,
+            borderRadius: radii.full,
+        },
+        subjectPillRow: {
+            flexDirection: 'row',
+            flexWrap: 'wrap',
+            gap: 6,
+            marginVertical: 10,
+        },
+        subChip: {
+            paddingVertical: 3,
+            paddingHorizontal: 8,
+            borderRadius: radii.full,
+            borderWidth: 1,
+            borderColor: colors.border,
+        },
+        subChipText: {
+            fontSize: typography.sizes.xs - 1,
+            fontWeight: '600',
         },
         cardFooter: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            marginTop: 12,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            paddingTop: 10,
+            marginTop: 4,
         },
         statsRow: {
             flex: 1,
@@ -1348,6 +1560,24 @@ const createStyles = (colors: ThemeColors) =>
             color: colors.textMuted,
             fontWeight: '500',
         },
+        floatingAddFab: {
+            position: 'absolute',
+            bottom: 88,
+            right: 18,
+            backgroundColor: colors.primary,
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 12,
+            paddingHorizontal: 18,
+            borderRadius: radii.full,
+            zIndex: 99,
+        },
+        fabText: {
+            color: '#FFFFFF',
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
+            letterSpacing: 0.2,
+        },
         drilldownContainer: {
             flex: 1,
             paddingHorizontal: 16,
@@ -1355,14 +1585,13 @@ const createStyles = (colors: ThemeColors) =>
         drilldownHeader: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
-            paddingBottom: 16,
+            paddingVertical: 16,
             gap: 12,
         },
         backBtn: {
-            width: 36,
-            height: 36,
-            borderRadius: radii.sm,
+            width: 40,
+            height: 40,
+            borderRadius: radii.controls,
             borderWidth: 1,
             borderColor: colors.border,
             alignItems: 'center',
@@ -1370,9 +1599,10 @@ const createStyles = (colors: ThemeColors) =>
             backgroundColor: colors.surface,
         },
         drilldownTitle: {
-            fontSize: 20,
+            fontSize: typography.sizes.lg,
             fontWeight: '700',
             color: colors.text,
+            letterSpacing: -0.2,
         },
         drilldownSubtitle: {
             fontSize: typography.sizes.xs,
@@ -1382,21 +1612,18 @@ const createStyles = (colors: ThemeColors) =>
         drilldownAddBtn: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 6,
-            paddingHorizontal: 10,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surface,
+            paddingVertical: 8,
+            paddingHorizontal: 12,
+            borderRadius: radii.controls,
         },
         drilldownAddText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
             marginLeft: 4,
         },
         subjectRowCard: {
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             marginBottom: 10,
@@ -1408,13 +1635,13 @@ const createStyles = (colors: ThemeColors) =>
             padding: 14,
         },
         subjectColorBar: {
-            width: 4,
-            height: 32,
-            borderRadius: 2,
+            width: 5,
+            height: 38,
+            borderRadius: 3,
         },
         subjectName: {
-            fontSize: typography.sizes.md,
-            fontWeight: '600',
+            fontSize: typography.sizes.sm + 1,
+            fontWeight: '700',
             color: colors.text,
         },
         subjectMeta: {
@@ -1423,13 +1650,14 @@ const createStyles = (colors: ThemeColors) =>
             marginTop: 2,
         },
         subjectDocsContainer: {
+            backgroundColor: colors.surfaceRaised,
             borderTopWidth: 1,
             borderTopColor: colors.border,
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 4,
+            paddingHorizontal: 14,
+            paddingVertical: 8,
         },
         emptySubjectDocs: {
-            padding: 14,
+            paddingVertical: 12,
             alignItems: 'center',
         },
         emptyDocsText: {
@@ -1440,13 +1668,19 @@ const createStyles = (colors: ThemeColors) =>
             flexDirection: 'row',
             alignItems: 'center',
             paddingVertical: 10,
-            paddingHorizontal: 16,
             borderBottomWidth: 1,
-            borderBottomColor: colors.borderLight,
+            borderBottomColor: colors.border,
+        },
+        docIconWrapper: {
+            width: 34,
+            height: 34,
+            borderRadius: radii.sm,
+            alignItems: 'center',
+            justifyContent: 'center',
         },
         docFileName: {
             fontSize: typography.sizes.sm,
-            fontWeight: '500',
+            fontWeight: '600',
             color: colors.text,
         },
         docFileSize: {
@@ -1467,9 +1701,13 @@ const createStyles = (colors: ThemeColors) =>
             marginBottom: 8,
         },
         ingestionModalTitle: {
-            fontSize: 20,
-            fontWeight: '700',
+            fontSize: typography.sizes.lg,
+            fontWeight: '800',
             color: colors.text,
+        },
+        closeBtn: {
+            padding: 6,
+            borderRadius: radii.full,
         },
         ingestionModalDescription: {
             fontSize: typography.sizes.sm,
@@ -1478,15 +1716,14 @@ const createStyles = (colors: ThemeColors) =>
             marginBottom: 18,
         },
         ingestionRow: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'space-between',
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
+            borderRadius: radii.cards,
             borderWidth: 1,
             borderColor: colors.border,
             padding: 16,
-            marginBottom: 10,
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginBottom: 12,
         },
         ingestionRowLeft: {
             flex: 1,
@@ -1494,14 +1731,24 @@ const createStyles = (colors: ThemeColors) =>
         },
         ingestionSubName: {
             fontSize: typography.sizes.md,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.text,
-            marginBottom: 2,
         },
         ingestionFileName: {
             fontSize: typography.sizes.xs,
             color: colors.textMuted,
-            marginBottom: 6,
+            marginTop: 2,
+        },
+        stageProgressBarBg: {
+            height: 5,
+            borderRadius: 3,
+            backgroundColor: colors.surfaceRaised,
+            overflow: 'hidden',
+            marginVertical: 8,
+        },
+        stageProgressBarFill: {
+            height: '100%',
+            borderRadius: 3,
         },
         stageIndicatorRow: {
             flexDirection: 'row',
@@ -1510,82 +1757,112 @@ const createStyles = (colors: ThemeColors) =>
         stageBadgeText: {
             fontSize: typography.sizes.xs,
             fontWeight: '600',
-            color: colors.accent,
+            color: colors.primary,
         },
         ingestionRowRight: {
+            alignItems: 'center',
+            justifyContent: 'center',
+        },
+        checkCircleWrapper: {
+            width: 36,
+            height: 36,
+            borderRadius: 18,
             alignItems: 'center',
             justifyContent: 'center',
         },
         retryBtn: {
             flexDirection: 'row',
             alignItems: 'center',
-            padding: 6,
+            borderWidth: 1,
+            paddingVertical: 5,
+            paddingHorizontal: 8,
+            borderRadius: radii.sm,
         },
         retryText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
             marginLeft: 4,
         },
         doneIngestBtn: {
             paddingVertical: 14,
-            borderRadius: radii.sm,
+            borderRadius: radii.controls,
             alignItems: 'center',
             justifyContent: 'center',
-            marginTop: 12,
+            marginTop: 10,
         },
         doneIngestText: {
-            fontSize: typography.sizes.md,
-            fontWeight: '600',
+            fontSize: typography.sizes.sm + 1,
+            fontWeight: '700',
         },
         modalSheetContainer: {
             flex: 1,
             backgroundColor: colors.bg,
             padding: 20,
-            paddingTop: Platform.OS === 'ios' ? 24 : 16,
         },
         modalSheetHeader: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
+            paddingBottom: 14,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
             marginBottom: 16,
         },
         modalSheetTitle: {
-            fontSize: 20,
-            fontWeight: '700',
+            fontSize: typography.sizes.lg,
+            fontWeight: '800',
             color: colors.text,
-        },
-        closeBtn: {
-            padding: 6,
         },
         fieldLabel: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
             color: colors.text,
             marginBottom: 6,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
         },
         fieldHelper: {
             fontSize: typography.sizes.xs,
             color: colors.textMuted,
-            marginBottom: 10,
+            marginBottom: 12,
+            lineHeight: 18,
+        },
+        breathingDropzone: {
+            borderWidth: 1.5,
+            borderStyle: 'dashed',
+            borderRadius: radii.cards,
+            paddingVertical: 20,
+            paddingHorizontal: 16,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginBottom: 16,
+        },
+        dropzoneTitle: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
+        },
+        dropzoneSub: {
+            fontSize: typography.sizes.xs,
+            marginTop: 2,
         },
         textInput: {
             backgroundColor: colors.surface,
             borderWidth: 1,
             borderColor: colors.border,
-            borderRadius: radii.sm,
-            paddingHorizontal: 12,
-            paddingVertical: 10,
+            borderRadius: radii.controls,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
             fontSize: typography.sizes.sm,
             color: colors.text,
-            marginBottom: 14,
+            marginBottom: 12,
         },
         subjectDraftCard: {
             backgroundColor: colors.surface,
-            borderRadius: radii.md,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 12,
-            marginBottom: 10,
+            borderRadius: radii.cards,
+            padding: 14,
+            marginBottom: 12,
         },
         subjectDraftHeader: {
             flexDirection: 'row',
@@ -1596,22 +1873,22 @@ const createStyles = (colors: ThemeColors) =>
             fontSize: typography.sizes.sm,
             fontWeight: '600',
             color: colors.text,
-            paddingVertical: 6,
+            paddingVertical: 4,
         },
         removeDraftBtn: {
             padding: 6,
         },
         draftFilesList: {
-            marginTop: 8,
-            gap: 4,
+            marginVertical: 8,
+            gap: 6,
         },
         draftFileChip: {
             flexDirection: 'row',
             alignItems: 'center',
             backgroundColor: colors.surfaceRaised,
-            paddingVertical: 4,
+            paddingVertical: 5,
             paddingHorizontal: 8,
-            borderRadius: radii.xs,
+            borderRadius: radii.sm,
         },
         draftFileName: {
             fontSize: typography.sizes.xs,
@@ -1623,41 +1900,39 @@ const createStyles = (colors: ThemeColors) =>
             alignItems: 'center',
             justifyContent: 'center',
             paddingVertical: 8,
-            marginTop: 8,
-            borderRadius: radii.sm,
+            paddingHorizontal: 12,
+            borderRadius: radii.controls,
             borderWidth: 1,
             borderColor: colors.border,
-            borderStyle: 'dashed',
+            marginTop: 6,
         },
         addPdfText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
         },
         addNewSubjectDraftBtn: {
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'center',
-            paddingVertical: 10,
-            borderRadius: radii.sm,
             borderWidth: 1,
-            borderColor: colors.border,
-            backgroundColor: colors.surface,
-            marginTop: 4,
+            borderStyle: 'dashed',
+            borderRadius: radii.controls,
+            paddingVertical: 12,
             marginBottom: 16,
         },
         addNewSubjectDraftText: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '700',
         },
         createCourseSubmitBtn: {
             paddingVertical: 14,
-            borderRadius: radii.sm,
+            borderRadius: radii.controls,
             alignItems: 'center',
             justifyContent: 'center',
         },
         createCourseSubmitText: {
-            fontSize: typography.sizes.md,
-            fontWeight: '600',
+            fontSize: typography.sizes.sm + 1,
+            fontWeight: '700',
         },
         modalOverlay: {
             flex: 1,
@@ -1670,49 +1945,50 @@ const createStyles = (colors: ThemeColors) =>
             width: '100%',
             maxWidth: 360,
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.sheets,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 16,
+            padding: 20,
         },
         actionSheetTitle: {
             fontSize: typography.sizes.md,
             fontWeight: '700',
             color: colors.text,
-            marginBottom: 14,
-            paddingHorizontal: 6,
+            marginBottom: 16,
+            paddingBottom: 10,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.border,
         },
         actionSheetOption: {
             flexDirection: 'row',
             alignItems: 'center',
             paddingVertical: 12,
-            paddingHorizontal: 8,
-            borderRadius: radii.sm,
-        },
-        destructiveOption: {
-            marginTop: 4,
-            borderTopWidth: 1,
-            borderTopColor: colors.borderLight,
         },
         actionSheetOptionText: {
             fontSize: typography.sizes.sm,
-            fontWeight: '500',
+            fontWeight: '600',
             color: colors.text,
+        },
+        destructiveOption: {
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
+            marginTop: 6,
+            paddingTop: 12,
         },
         dialogCard: {
             width: '100%',
-            maxWidth: 360,
+            maxWidth: 380,
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.sheets,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 20,
+            padding: 22,
         },
         dialogTitle: {
             fontSize: typography.sizes.lg,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.text,
-            marginBottom: 12,
+            marginBottom: 14,
         },
         dialogActions: {
             flexDirection: 'row',
@@ -1721,27 +1997,27 @@ const createStyles = (colors: ThemeColors) =>
             marginTop: 10,
         },
         cancelDialogBtn: {
-            paddingVertical: 8,
-            paddingHorizontal: 14,
-            borderRadius: radii.sm,
+            paddingVertical: 10,
+            paddingHorizontal: 16,
+            borderRadius: radii.controls,
             backgroundColor: colors.surfaceRaised,
             borderWidth: 1,
             borderColor: colors.border,
         },
         cancelDialogText: {
             fontSize: typography.sizes.sm,
+            fontWeight: '600',
             color: colors.textSecondary,
-            fontWeight: '500',
         },
         confirmDialogBtn: {
-            paddingVertical: 8,
-            paddingHorizontal: 14,
-            borderRadius: radii.sm,
+            paddingVertical: 10,
+            paddingHorizontal: 18,
+            borderRadius: radii.controls,
         },
         confirmDialogText: {
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontWeight: '700',
         },
     });
 
-export default LibraryScreen;
+export default DashboardScreen;

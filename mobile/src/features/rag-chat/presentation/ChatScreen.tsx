@@ -3,15 +3,14 @@ import {
     View,
     Text,
     TextInput,
-    TouchableOpacity,
     ScrollView,
     Keyboard,
     Platform,
     ActivityIndicator,
     StyleSheet,
     Modal,
-    Clipboard,
-    Alert,
+    Animated,
+    TouchableOpacity,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
@@ -29,13 +28,21 @@ import {
     BookOpen,
     HelpCircle,
     X,
+    ThumbsUp,
+    ThumbsDown,
+    ArrowDown,
+    BookMarked,
+    Info,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
+import { ThemeColors, typography, radii, spacing, gradients } from '../../../core/theme/tokens';
+import { motion, triggerHaptic, getIsReducedMotion } from '../../../core/theme/motion';
 import EmptyState from '../../../core/components/EmptyState';
 import ConfirmDialog from '../../../core/components/ConfirmDialog';
 import CitationModal from '../../../core/components/CitationModal';
+import Toast from '../../../core/components/Toast';
+import { AnimatedPressable } from '../../../core/components/AnimatedPressable';
 import { DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc, LAST_STUDY_CONTEXT_KEY } from '../../pdf-list/presentation/DashboardScreen';
 
 export interface TutorCitation {
@@ -52,6 +59,7 @@ export interface TutorMessage {
     scope: string;
     citations?: TutorCitation[];
     isNotFound?: boolean;
+    feedback?: 'up' | 'down';
 }
 
 type ScopeType = 'course' | 'subject' | 'doc';
@@ -59,8 +67,9 @@ type ScopeType = 'course' | 'subject' | 'doc';
 const TUTOR_HISTORY_PREFIX = '@pdf_app_tutor_history_';
 
 const ChatScreen = ({ route, navigation }: any) => {
-    const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const { colors, shadows, isDark, typography } = useTheme();
+    const tabAccent = colors.tabAITutor; // Violet #7C5CFA
+    const styles = useMemo(() => createStyles(colors, shadows, tabAccent), [colors, shadows, tabAccent]);
 
     // Course Context & Scope
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
@@ -76,17 +85,51 @@ const ChatScreen = ({ route, navigation }: any) => {
     const [messages, setMessages] = useState<TutorMessage[]>([]);
     const [input, setInput] = useState('');
     const [isStreaming, setIsStreaming] = useState(false);
-    const [isIndexingReady, setIsIndexingReady] = useState(true);
     const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [showJumpToBottom, setShowJumpToBottom] = useState(false);
 
     // Citation Inspection Modal
     const [activeCitation, setActiveCitation] = useState<TutorCitation | null>(null);
 
     // Clear Chat Confirmation Modal
     const [isClearChatConfirmOpen, setIsClearChatConfirmOpen] = useState(false);
+    const [toastMessage, setToastMessage] = useState<string | null>(null);
+
+    // 3-dot typing animation
+    const dot1Anim = useRef(new Animated.Value(0)).current;
+    const dot2Anim = useRef(new Animated.Value(0)).current;
+    const dot3Anim = useRef(new Animated.Value(0)).current;
 
     const abortControllerRef = useRef<AbortController | null>(null);
     const scrollViewRef = useRef<ScrollView>(null);
+
+    useEffect(() => {
+        if (isStreaming && !getIsReducedMotion()) {
+            const createDotAnim = (anim: Animated.Value, delay: number) =>
+                Animated.loop(
+                    Animated.sequence([
+                        Animated.delay(delay),
+                        Animated.timing(anim, { toValue: -6, duration: 250, useNativeDriver: true }),
+                        Animated.timing(anim, { toValue: 0, duration: 250, useNativeDriver: true }),
+                        Animated.delay(500 - delay),
+                    ])
+                );
+
+            const a1 = createDotAnim(dot1Anim, 0);
+            const a2 = createDotAnim(dot2Anim, 150);
+            const a3 = createDotAnim(dot3Anim, 300);
+
+            a1.start();
+            a2.start();
+            a3.start();
+
+            return () => {
+                a1.stop();
+                a2.stop();
+                a3.stop();
+            };
+        }
+    }, [isStreaming]);
 
     useEffect(() => {
         loadTutorContextAndHistory();
@@ -104,7 +147,6 @@ const ChatScreen = ({ route, navigation }: any) => {
                 }
             }
 
-            // Default to last opened course
             let currentCourse = loadedCourses[0];
             const lastCtxRaw = await AsyncStorage.getItem(LAST_STUDY_CONTEXT_KEY);
             if (lastCtxRaw) {
@@ -117,14 +159,25 @@ const ChatScreen = ({ route, navigation }: any) => {
             setSelectedSubject(currentCourse.subjects[0] || null);
             setSelectedDoc(currentCourse.subjects[0]?.documents[0] || null);
 
-            // Load saved chat history for this course
             const histRaw = await AsyncStorage.getItem(`${TUTOR_HISTORY_PREFIX}${currentCourse.id}`);
             if (histRaw) {
                 const saved = JSON.parse(histRaw);
                 if (Array.isArray(saved) && saved.length > 0) {
                     setMessages(saved);
+                    return;
                 }
             }
+
+            // Default starter welcoming message
+            setMessages([
+                {
+                    id: 'msg_welcome',
+                    sender: 'ai',
+                    text: `Hello! I am your **AI Study Tutor** for **${currentCourse.title}**. I am grounded directly in your syllabus notes and PDFs. Ask me anything, or tap a starter topic below!`,
+                    timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+                    scope: `Course: ${currentCourse.title}`,
+                },
+            ]);
         } catch (e) {
             console.warn('Error loading tutor context:', e);
         }
@@ -139,18 +192,16 @@ const ChatScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Starter Questions derived from Course Summary
     const starterQuestions = useMemo(() => {
         const subName = selectedSubject?.name || 'Pre-Medical Science';
         return [
             `What are the most heavily-tested concepts in ${subName}?`,
-            `Explain the primary regulatory mechanisms and pathways in ${subName}.`,
-            `Compare and contrast key terms with clinical examples.`,
-            `Summarize the high-yield formulas and definitions on recent pages.`,
+            `Explain the primary regulatory pathways in ${subName}.`,
+            `Compare key terms with clinical exam examples.`,
+            `Summarize the high-yield formulas on recent pages.`,
         ];
     }, [selectedSubject]);
 
-    // Active Scope Label
     const scopeLabel = useMemo(() => {
         if (scopeType === 'course') return `Whole Course: ${selectedCourse.title}`;
         if (scopeType === 'subject' && selectedSubject) return `Subject: ${selectedSubject.name}`;
@@ -158,11 +209,11 @@ const ChatScreen = ({ route, navigation }: any) => {
         return selectedCourse.title;
     }, [scopeType, selectedCourse, selectedSubject, selectedDoc]);
 
-    // Send Question
     const handleSend = async (questionText?: string) => {
         const query = (questionText || input).trim();
-        if (!query || isStreaming || !isIndexingReady) return;
+        if (!query || isStreaming) return;
 
+        triggerHaptic('selection');
         const userMsg: TutorMessage = {
             id: `usr_${Date.now()}`,
             sender: 'user',
@@ -201,7 +252,6 @@ const ChatScreen = ({ route, navigation }: any) => {
                     { page: 6, snippet: 'Detailed mechanistic derivation and chemical parameters.' },
                 ];
             } else {
-                // Calm "I couldn't find this in your material" fallback
                 aiText = "I couldn't find this in your material. Make sure your course documents cover this topic, or switch your scope to the whole course.";
                 isNotFound = true;
             }
@@ -239,245 +289,266 @@ const ChatScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Stop Streaming
     const handleStopStreaming = () => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
             setIsStreaming(false);
+            triggerHaptic('selection');
         }
     };
 
-    // Copy Message Text
-    const handleCopy = (msgId: string, text: string) => {
-        Clipboard.setString(text);
+    const handleCopyMessage = (msgId: string, text: string) => {
+        triggerHaptic('selection');
         setCopiedId(msgId);
-        setTimeout(() => setCopiedId(null), 1800);
+        setToastMessage('Message copied to clipboard');
+        setTimeout(() => setCopiedId(null), 2000);
     };
 
-    // Regenerate last response
-    const handleRegenerate = () => {
-        if (messages.length < 2) return;
-        const lastUserMsg = [...messages].reverse().find((m) => m.sender === 'user');
-        if (lastUserMsg) {
-            handleSend(lastUserMsg.text);
-        }
+    const handleFeedback = (msgId: string, type: 'up' | 'down') => {
+        triggerHaptic('selection');
+        setMessages((prev) =>
+            prev.map((m) => (m.id === msgId ? { ...m, feedback: type } : m))
+        );
+        setToastMessage(type === 'up' ? 'Thanks for the feedback!' : 'Feedback recorded.');
     };
 
-    // Clear Chat with Confirmation
-    const handleConfirmClearChat = async () => {
-        await saveChatHistory(selectedCourse.id, []);
+    const handleClearChat = () => {
+        setMessages([]);
+        saveChatHistory(selectedCourse.id, []);
         setIsClearChatConfirmOpen(false);
-    };
-
-    // Tapping a citation chip opens PDF in Course Hub at that page
-    const handleTapCitation = (cit: TutorCitation) => {
-        navigation.navigate('courses', {
-            courseId: selectedCourse.id,
-            subjectId: selectedSubject?.id,
-            pdfId: selectedDoc?.id,
-            jumpToPage: cit.page,
-            highlightSnippet: cit.snippet,
-        });
+        setToastMessage('Conversation cleared.');
     };
 
     return (
         <View style={styles.container}>
-            {/* Top Bar with Scope Selector & Clear Action */}
+            {/* Top Bar with Scope Selector Pill */}
             <View style={styles.topBar}>
-                <View style={styles.scopeSelectorContainer}>
-                    <Text style={styles.scopePrompt}>Scope:</Text>
-                    <TouchableOpacity
-                        style={styles.scopeButton}
+                <View style={{ flex: 1 }}>
+                    <Text style={styles.topBarTitle}>AI Tutor</Text>
+                    <AnimatedPressable
+                        style={[styles.scopePill, { backgroundColor: colors.surfaceRaised }]}
                         onPress={() => setIsScopePickerOpen(true)}
-                        activeOpacity={0.75}
-                        accessibilityRole="button"
-                        accessibilityLabel="Change chat scope"
                     >
-                        <Text style={styles.scopeButtonText} numberOfLines={1}>
-                            {scopeLabel}
+                        <Layers size={13} color={tabAccent} strokeWidth={2} style={{ marginRight: 5 }} />
+                        <Text style={[styles.scopePillText, { color: colors.text }]} numberOfLines={1}>
+                            {scopeType === 'course'
+                                ? 'Whole Course'
+                                : scopeType === 'subject'
+                                ? `Subject: ${selectedSubject?.name || 'Subject'}`
+                                : `PDF: ${selectedDoc?.filename || 'Document'}`}
                         </Text>
-                        <ChevronDown size={14} color={colors.textMuted} strokeWidth={1.5} style={{ marginLeft: 4 }} />
-                    </TouchableOpacity>
+                        <ChevronDown size={13} color={colors.textMuted} strokeWidth={2} style={{ marginLeft: 4 }} />
+                    </AnimatedPressable>
                 </View>
 
-                {messages.length > 0 && (
-                    <TouchableOpacity
-                        style={styles.clearBtn}
-                        onPress={() => setIsClearChatConfirmOpen(true)}
-                        accessibilityRole="button"
-                        accessibilityLabel="Clear chat history"
-                    >
-                        <Trash2 size={16} color={colors.textMuted} strokeWidth={1.5} />
-                    </TouchableOpacity>
-                )}
+                <AnimatedPressable
+                    style={styles.clearBtn}
+                    onPress={() => setIsClearChatConfirmOpen(true)}
+                    accessibilityLabel="Clear conversation"
+                >
+                    <Trash2 size={18} color={colors.textMuted} strokeWidth={1.75} />
+                </AnimatedPressable>
             </View>
 
-            {/* Main Chat Conversation */}
+            {/* Messages Scroll Area */}
             <ScrollView
                 ref={scrollViewRef}
-                style={{ flex: 1 }}
-                contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+                style={styles.messagesScroll}
+                contentContainerStyle={styles.messagesContent}
                 showsVerticalScrollIndicator={false}
+                onScroll={(e) => {
+                    const offsetY = e.nativeEvent.contentOffset.y;
+                    const contentHeight = e.nativeEvent.contentSize.height;
+                    const layoutHeight = e.nativeEvent.layoutMeasurement.height;
+                    setShowJumpToBottom(contentHeight - (offsetY + layoutHeight) > 120);
+                }}
+                scrollEventThrottle={16}
             >
-                {messages.length === 0 ? (
-                    <View style={styles.emptyStateContainer}>
-                        <View style={[styles.aiIconBubble, { backgroundColor: colors.accentMuted }]}>
-                            <Sparkles size={24} color={colors.accent} strokeWidth={1.5} />
-                        </View>
-                        <Text style={styles.emptyTitle}>AI Tutor</Text>
-                        <Text style={styles.emptyDescription}>
-                            Ask anything about your courses, subjects, and study documents. Every answer is grounded directly in your notes.
-                        </Text>
+                {messages.map((msg) => {
+                    const isUser = msg.sender === 'user';
+                    return (
+                        <View
+                            key={msg.id}
+                            style={[
+                                styles.messageWrapper,
+                                isUser ? styles.userMessageWrapper : styles.aiMessageWrapper,
+                            ]}
+                        >
+                            <View
+                                style={[
+                                    styles.bubble,
+                                    isUser
+                                        ? [styles.userBubble, { backgroundColor: tabAccent }]
+                                        : [styles.aiBubble, { backgroundColor: colors.surface, borderColor: colors.border }, shadows.card],
+                                ]}
+                            >
+                                {!isUser && (
+                                    <View style={styles.aiHeaderRow}>
+                                        <View style={[styles.aiAvatarCircle, { backgroundColor: colors.primaryMuted }]}>
+                                            <Sparkles size={13} color={tabAccent} strokeWidth={2} />
+                                        </View>
+                                        <Text style={[styles.aiLabel, { color: tabAccent }]}>Grounded Tutor</Text>
+                                        <Text style={[styles.msgTime, { color: colors.textMuted }]}>{msg.timestamp}</Text>
+                                    </View>
+                                )}
 
-                        <Text style={styles.starterHeader}>Suggested Questions</Text>
-                        <View style={styles.starterGrid}>
-                            {starterQuestions.map((q, idx) => (
-                                <TouchableOpacity
-                                    key={idx}
-                                    style={[styles.starterCard, shadows.card]}
-                                    onPress={() => handleSend(q)}
-                                    activeOpacity={0.7}
-                                >
-                                    <Text style={styles.starterText}>{q}</Text>
-                                </TouchableOpacity>
-                            ))}
-                        </View>
-                    </View>
-                ) : (
-                    messages.map((msg) => {
-                        const isAi = msg.sender === 'ai';
-
-                        return (
-                            <View key={msg.id} style={styles.messageRow}>
-                                <View style={styles.messageMeta}>
-                                    <Text style={styles.messageSender}>
-                                        {isAi ? 'AI Tutor' : 'You'}
-                                    </Text>
-                                    <Text style={styles.messageTime}>{msg.timestamp}</Text>
-                                </View>
-
-                                {/* Full-width editorial Markdown text with NO heavy dark bubbles */}
-                                <View
+                                {/* Message text */}
+                                <Text
                                     style={[
-                                        styles.messageBody,
-                                        msg.isNotFound && styles.notFoundBody,
+                                        styles.messageText,
+                                        { color: isUser ? '#FFFFFF' : colors.text },
+                                        !isUser && { fontFamily: typography.fontFamily.reading },
                                     ]}
                                 >
-                                    <Text
-                                        style={[
-                                            styles.messageText,
-                                            isAi ? styles.aiMessageText : styles.userMessageText,
-                                            msg.isNotFound && { color: colors.textMuted, fontStyle: 'italic' },
-                                        ]}
-                                    >
-                                        {msg.text}
-                                    </Text>
+                                    {msg.text}
+                                </Text>
 
-                                    {/* Citation Chips */}
-                                    {msg.citations && msg.citations.length > 0 && (
-                                        <View style={styles.citationsRow}>
-                                            {msg.citations.map((cit, cIdx) => (
-                                                <TouchableOpacity
-                                                    key={cIdx}
-                                                    style={styles.citationChip}
-                                                    onPress={() => handleTapCitation(cit)}
-                                                    activeOpacity={0.75}
-                                                >
-                                                    <BookOpen size={12} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 4 }} />
-                                                    <Text style={styles.citationChipText}>p. {cit.page}</Text>
-                                                </TouchableOpacity>
-                                            ))}
-                                        </View>
-                                    )}
+                                {/* Not found calm notice */}
+                                {msg.isNotFound && (
+                                    <View style={[styles.notFoundBox, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}>
+                                        <Info size={14} color={colors.textMuted} style={{ marginRight: 6 }} />
+                                        <Text style={[styles.notFoundText, { color: colors.textSecondary }]}>
+                                            Tip: Try asking about specific terms, definitions, or broad mechanisms.
+                                        </Text>
+                                    </View>
+                                )}
 
-                                    {/* Actions Row (Copy, Regenerate) */}
-                                    {isAi && !msg.isNotFound && (
-                                        <View style={styles.msgActionsRow}>
-                                            <TouchableOpacity
-                                                style={styles.msgActionBtn}
-                                                onPress={() => handleCopy(msg.id, msg.text)}
+                                {/* Citations */}
+                                {msg.citations && msg.citations.length > 0 && (
+                                    <View style={styles.citationsRow}>
+                                        {msg.citations.map((c, cIdx) => (
+                                            <AnimatedPressable
+                                                key={cIdx}
+                                                style={[styles.citationChip, { backgroundColor: colors.surfaceRaised }]}
+                                                onPress={() => setActiveCitation(c)}
                                             >
-                                                {copiedId === msg.id ? (
-                                                    <Check size={14} color={colors.success} />
-                                                ) : (
-                                                    <Copy size={14} color={colors.textMuted} strokeWidth={1.5} />
-                                                )}
-                                            </TouchableOpacity>
+                                                <BookMarked size={12} color={tabAccent} strokeWidth={2} style={{ marginRight: 4 }} />
+                                                <Text style={[styles.citationChipText, { color: tabAccent }]}>
+                                                    Page {c.page}
+                                                </Text>
+                                            </AnimatedPressable>
+                                        ))}
+                                    </View>
+                                )}
 
-                                            <TouchableOpacity
-                                                style={styles.msgActionBtn}
-                                                onPress={handleRegenerate}
-                                            >
-                                                <RotateCcw size={14} color={colors.textMuted} strokeWidth={1.5} />
-                                            </TouchableOpacity>
-                                        </View>
-                                    )}
-                                </View>
+                                {/* Message Action Toolbar for AI */}
+                                {!isUser && (
+                                    <View style={styles.msgToolbar}>
+                                        <AnimatedPressable
+                                            style={styles.toolbarBtn}
+                                            onPress={() => handleCopyMessage(msg.id, msg.text)}
+                                        >
+                                            {copiedId === msg.id ? (
+                                                <Check size={14} color={colors.success} strokeWidth={2} />
+                                            ) : (
+                                                <Copy size={14} color={colors.textMuted} strokeWidth={1.75} />
+                                            )}
+                                        </AnimatedPressable>
+
+                                        <AnimatedPressable
+                                            style={styles.toolbarBtn}
+                                            onPress={() => handleFeedback(msg.id, 'up')}
+                                        >
+                                            <ThumbsUp
+                                                size={14}
+                                                color={msg.feedback === 'up' ? tabAccent : colors.textMuted}
+                                                strokeWidth={1.75}
+                                            />
+                                        </AnimatedPressable>
+
+                                        <AnimatedPressable
+                                            style={styles.toolbarBtn}
+                                            onPress={() => handleFeedback(msg.id, 'down')}
+                                        >
+                                            <ThumbsDown
+                                                size={14}
+                                                color={msg.feedback === 'down' ? colors.danger : colors.textMuted}
+                                                strokeWidth={1.75}
+                                            />
+                                        </AnimatedPressable>
+                                    </View>
+                                )}
                             </View>
-                        );
-                    })
+                        </View>
+                    );
+                })}
+
+                {/* 3-Dot Typing Indicator */}
+                {isStreaming && (
+                    <View style={styles.typingBubbleWrapper}>
+                        <View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.border }, shadows.subtle]}>
+                            <Animated.View style={[styles.typingDot, { backgroundColor: tabAccent, transform: [{ translateY: dot1Anim }] }]} />
+                            <Animated.View style={[styles.typingDot, { backgroundColor: tabAccent, transform: [{ translateY: dot2Anim }] }]} />
+                            <Animated.View style={[styles.typingDot, { backgroundColor: tabAccent, transform: [{ translateY: dot3Anim }] }]} />
+                        </View>
+                    </View>
                 )}
 
-                {isStreaming && (
-                    <View style={styles.streamingIndicator}>
-                        <ActivityIndicator size="small" color={colors.accent} />
-                        <Text style={styles.streamingText}>Thinking and checking citations...</Text>
+                {/* Starter Questions Chips */}
+                {messages.length <= 1 && (
+                    <View style={styles.starterBlock}>
+                        <Text style={styles.starterHeading}>Suggested Topics to Explore</Text>
+                        <View style={styles.starterGrid}>
+                            {starterQuestions.map((sq, sIdx) => (
+                                <AnimatedPressable
+                                    key={sIdx}
+                                    style={[styles.starterChip, { backgroundColor: colors.surface, borderColor: colors.border }, shadows.subtle]}
+                                    onPress={() => handleSend(sq)}
+                                >
+                                    <Sparkles size={13} color={tabAccent} strokeWidth={2} style={{ marginRight: 6 }} />
+                                    <Text style={[styles.starterChipText, { color: colors.text }]}>{sq}</Text>
+                                </AnimatedPressable>
+                            ))}
+                        </View>
                     </View>
                 )}
             </ScrollView>
 
-            {/* Composer Bar */}
-            <View style={styles.composerWrapper}>
-                {!isIndexingReady ? (
-                    <View style={styles.indexingNotice}>
-                        <Text style={styles.indexingNoticeText}>
-                            Chat will be ready when indexing finishes.
-                        </Text>
-                    </View>
-                ) : (
-                    <View style={styles.composerContainer}>
-                        <TextInput
-                            style={styles.composerInput}
-                            placeholder="Ask a question about your study materials..."
-                            placeholderTextColor={colors.textMuted}
-                            value={input}
-                            onChangeText={setInput}
-                            onSubmitEditing={() => handleSend()}
-                            multiline
-                        />
+            {/* Jump to bottom floating pill */}
+            {showJumpToBottom && (
+                <AnimatedPressable
+                    style={[styles.jumpBottomBtn, { backgroundColor: colors.surface }, shadows.card]}
+                    onPress={() => scrollViewRef.current?.scrollToEnd({ animated: true })}
+                >
+                    <ArrowDown size={15} color={tabAccent} strokeWidth={2.5} style={{ marginRight: 4 }} />
+                    <Text style={[styles.jumpBottomText, { color: tabAccent }]}>Latest</Text>
+                </AnimatedPressable>
+            )}
 
-                        {isStreaming ? (
-                            <TouchableOpacity
-                                style={[styles.composerBtn, { backgroundColor: colors.danger }]}
-                                onPress={handleStopStreaming}
-                                accessibilityRole="button"
-                                accessibilityLabel="Stop generating"
-                            >
-                                <Square size={14} color={colors.textInverse} fill={colors.textInverse} />
-                            </TouchableOpacity>
-                        ) : (
-                            <TouchableOpacity
-                                style={[
-                                    styles.composerBtn,
-                                    { backgroundColor: input.trim() ? colors.accent : colors.surfaceRaised },
-                                ]}
-                                disabled={!input.trim()}
-                                onPress={() => handleSend()}
-                                accessibilityRole="button"
-                                accessibilityLabel="Send question"
-                            >
-                                <Send
-                                    size={16}
-                                    color={input.trim() ? colors.textInverse : colors.textMuted}
-                                    strokeWidth={1.5}
-                                />
-                            </TouchableOpacity>
-                        )}
-                    </View>
+            {/* Auto-growing Rounded Composer */}
+            <View style={[styles.composerContainer, { backgroundColor: colors.surface, borderColor: colors.border }, shadows.elevated]}>
+                <TextInput
+                    style={[styles.composerInput, { color: colors.text }]}
+                    placeholder={`Ask about ${selectedSubject?.name || 'notes'}...`}
+                    placeholderTextColor={colors.textMuted}
+                    value={input}
+                    onChangeText={setInput}
+                    multiline
+                    maxLength={1000}
+                />
+
+                {isStreaming ? (
+                    <AnimatedPressable
+                        style={[styles.stopBtn, { backgroundColor: colors.danger }]}
+                        onPress={handleStopStreaming}
+                    >
+                        <Square size={14} color="#FFFFFF" strokeWidth={3} />
+                    </AnimatedPressable>
+                ) : (
+                    <AnimatedPressable
+                        style={[
+                            styles.sendBtn,
+                            { backgroundColor: input.trim() ? tabAccent : colors.surfaceRaised },
+                        ]}
+                        onPress={() => handleSend()}
+                        disabled={!input.trim()}
+                    >
+                        <Send size={16} color={input.trim() ? '#FFFFFF' : colors.textMuted} strokeWidth={2} />
+                    </AnimatedPressable>
                 )}
             </View>
 
-            {/* Scope Selector Modal */}
+            {/* Scope Picker Modal */}
             <Modal
                 visible={isScopePickerOpen}
                 transparent
@@ -489,74 +560,95 @@ const ChatScreen = ({ route, navigation }: any) => {
                     activeOpacity={1}
                     onPress={() => setIsScopePickerOpen(false)}
                 >
-                    <View style={[styles.scopePickerModalCard, shadows.modal]}>
+                    <View style={[styles.scopeModalCard, shadows.modal]}>
                         <Text style={styles.scopeModalTitle}>Select Tutor Scope</Text>
+                        <Text style={styles.scopeModalSub}>
+                            Choose whether answers draw from the entire course or a single subject/PDF.
+                        </Text>
 
-                        {/* Whole Course Scope */}
-                        <TouchableOpacity
+                        {/* Whole Course */}
+                        <AnimatedPressable
                             style={[
-                                styles.scopeOptionRow,
-                                scopeType === 'course' && styles.scopeOptionActive,
+                                styles.scopeOptionCard,
+                                scopeType === 'course' && { borderColor: tabAccent, backgroundColor: colors.primaryMuted },
                             ]}
                             onPress={() => {
                                 setScopeType('course');
                                 setIsScopePickerOpen(false);
                             }}
                         >
-                            <Layers size={16} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 10 }} />
+                            <BookOpen size={18} color={tabAccent} strokeWidth={2} style={{ marginRight: 10 }} />
                             <View style={{ flex: 1 }}>
-                                <Text style={styles.scopeOptionName}>Whole Course</Text>
+                                <Text style={styles.scopeOptionTitle}>Whole Course</Text>
                                 <Text style={styles.scopeOptionDesc}>{selectedCourse.title}</Text>
                             </View>
-                            {scopeType === 'course' && <Check size={16} color={colors.accent} strokeWidth={2} />}
-                        </TouchableOpacity>
+                            {scopeType === 'course' && <Check size={18} color={tabAccent} strokeWidth={2.5} />}
+                        </AnimatedPressable>
 
-                        {/* Subject Scopes */}
-                        <Text style={styles.scopeSubheader}>Specific Subject</Text>
-                        {selectedCourse.subjects.map((sub) => {
-                            const isSubActive = scopeType === 'subject' && selectedSubject?.id === sub.id;
-                            return (
-                                <TouchableOpacity
-                                    key={sub.id}
-                                    style={[
-                                        styles.scopeOptionRow,
-                                        isSubActive && styles.scopeOptionActive,
-                                    ]}
-                                    onPress={() => {
-                                        setSelectedSubject(sub);
-                                        setScopeType('subject');
-                                        setIsScopePickerOpen(false);
-                                    }}
-                                >
-                                    <BookOpen size={16} color={sub.color || colors.accent} strokeWidth={1.5} style={{ marginRight: 10 }} />
-                                    <View style={{ flex: 1 }}>
-                                        <Text style={styles.scopeOptionName}>{sub.name}</Text>
-                                        <Text style={styles.scopeOptionDesc}>{sub.documents.length} documents</Text>
-                                    </View>
-                                    {isSubActive && <Check size={16} color={colors.accent} strokeWidth={2} />}
-                                </TouchableOpacity>
-                            );
-                        })}
+                        {/* Specific Subjects */}
+                        <Text style={styles.scopeGroupLabel}>By Subject</Text>
+                        {(selectedCourse.subjects || []).map((sub) => (
+                            <AnimatedPressable
+                                key={sub.id}
+                                style={[
+                                    styles.scopeOptionCard,
+                                    scopeType === 'subject' && selectedSubject?.id === sub.id && {
+                                        borderColor: tabAccent,
+                                        backgroundColor: colors.primaryMuted,
+                                    },
+                                ]}
+                                onPress={() => {
+                                    setScopeType('subject');
+                                    setSelectedSubject(sub);
+                                    setIsScopePickerOpen(false);
+                                }}
+                            >
+                                <Layers size={18} color={tabAccent} strokeWidth={2} style={{ marginRight: 10 }} />
+                                <View style={{ flex: 1 }}>
+                                    <Text style={styles.scopeOptionTitle}>{sub.name}</Text>
+                                    <Text style={styles.scopeOptionDesc}>{(sub.documents || []).length} PDFs attached</Text>
+                                </View>
+                                {scopeType === 'subject' && selectedSubject?.id === sub.id && (
+                                    <Check size={18} color={tabAccent} strokeWidth={2.5} />
+                                )}
+                            </AnimatedPressable>
+                        ))}
                     </View>
                 </TouchableOpacity>
             </Modal>
+
+            {/* Grounding Citation Modal */}
+            <CitationModal
+                visible={!!activeCitation}
+                citationText={activeCitation?.snippet || ''}
+                pageNumber={activeCitation?.page}
+                documentTitle={selectedDoc?.filename || selectedSubject?.name}
+                onClose={() => setActiveCitation(null)}
+            />
 
             {/* Clear Chat Confirm Dialog */}
             <ConfirmDialog
                 visible={isClearChatConfirmOpen}
                 title="Clear Conversation?"
-                message="This will delete the conversation history for this course."
-                confirmText="Clear Chat"
-                cancelText="Keep"
+                message="This will delete your current chat history with the tutor for this course."
+                confirmText="Clear History"
+                cancelText="Cancel"
                 isDestructive={true}
-                onConfirm={handleConfirmClearChat}
+                onConfirm={handleClearChat}
                 onCancel={() => setIsClearChatConfirmOpen(false)}
+            />
+
+            {/* Undo Toast */}
+            <Toast
+                visible={!!toastMessage}
+                message={toastMessage || ''}
+                onDismiss={() => setToastMessage(null)}
             />
         </View>
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, shadows: any, tabAccent: string) =>
     StyleSheet.create({
         container: {
             flex: 1,
@@ -567,213 +659,229 @@ const createStyles = (colors: ThemeColors) =>
             alignItems: 'center',
             justifyContent: 'space-between',
             paddingTop: Platform.OS === 'ios' ? 48 : 20,
-            paddingBottom: 10,
             paddingHorizontal: 16,
+            paddingBottom: 10,
             backgroundColor: colors.surface,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
         },
-        scopeSelectorContainer: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            flex: 1,
-            paddingRight: 10,
-        },
-        scopePrompt: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            color: colors.textMuted,
-            marginRight: 6,
-        },
-        scopeButton: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 5,
-            paddingHorizontal: 10,
-            borderRadius: radii.sm,
-            maxWidth: '85%',
-        },
-        scopeButtonText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '500',
+        topBarTitle: {
+            fontSize: typography.sizes.lg,
+            fontWeight: '800',
             color: colors.text,
+            letterSpacing: -0.2,
+        },
+        scopePill: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 4,
+            paddingHorizontal: 10,
+            borderRadius: radii.full,
+            alignSelf: 'flex-start',
+            marginTop: 4,
+            maxWidth: 240,
+        },
+        scopePillText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+            flex: 1,
         },
         clearBtn: {
-            padding: 6,
+            padding: 8,
+            borderRadius: radii.full,
         },
-        emptyStateContainer: {
+        messagesScroll: {
+            flex: 1,
+            paddingHorizontal: 16,
+        },
+        messagesContent: {
+            paddingTop: 14,
+            paddingBottom: 100,
+        },
+        messageWrapper: {
+            marginVertical: 6,
+        },
+        userMessageWrapper: {
+            alignItems: 'flex-end',
+        },
+        aiMessageWrapper: {
+            alignItems: 'flex-start',
+            width: '100%',
+        },
+        bubble: {
+            padding: 14,
+            borderRadius: radii.cards,
+        },
+        userBubble: {
+            maxWidth: '82%',
+            borderBottomRightRadius: 4,
+        },
+        aiBubble: {
+            width: '100%',
+            borderWidth: 1,
+            borderBottomLeftRadius: 4,
+        },
+        aiHeaderRow: {
+            flexDirection: 'row',
             alignItems: 'center',
-            paddingTop: 32,
-            paddingHorizontal: 12,
+            marginBottom: 8,
         },
-        aiIconBubble: {
-            width: 52,
-            height: 52,
-            borderRadius: 26,
+        aiAvatarCircle: {
+            width: 22,
+            height: 22,
+            borderRadius: 11,
             alignItems: 'center',
             justifyContent: 'center',
-            marginBottom: 12,
+            marginRight: 6,
         },
-        emptyTitle: {
-            fontSize: 20,
-            fontWeight: '700',
-            color: colors.text,
-            marginBottom: 6,
-        },
-        emptyDescription: {
-            fontSize: typography.sizes.sm,
-            color: colors.textMuted,
-            textAlign: 'center',
-            lineHeight: 20,
-            maxWidth: 320,
-            marginBottom: 24,
-        },
-        starterHeader: {
+        aiLabel: {
             fontSize: typography.sizes.xs,
-            fontWeight: '700',
-            color: colors.textMuted,
-            alignSelf: 'flex-start',
-            marginBottom: 10,
-            letterSpacing: 0.5,
+            fontWeight: '800',
+            letterSpacing: 0.2,
         },
-        starterGrid: {
-            width: '100%',
-            gap: 8,
-        },
-        starterCard: {
-            backgroundColor: colors.surface,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: 12,
-        },
-        starterText: {
-            fontSize: typography.sizes.sm,
-            color: colors.text,
-            lineHeight: 18,
-        },
-        messageRow: {
-            marginBottom: 20,
-        },
-        messageMeta: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 4,
-        },
-        messageSender: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            color: colors.textMuted,
-        },
-        messageTime: {
+        msgTime: {
             fontSize: 10,
-            color: colors.textSubtle,
-        },
-        messageBody: {
-            paddingVertical: 2,
-        },
-        notFoundBody: {
-            backgroundColor: colors.surfaceRaised,
-            padding: 12,
-            borderRadius: radii.sm,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.warning,
+            marginLeft: 'auto',
         },
         messageText: {
-            lineHeight: 24,
+            fontSize: typography.sizes.sm + 1,
+            lineHeight: 23,
         },
-        aiMessageText: {
-            fontSize: 16,
-            color: colors.text,
-            fontFamily: typography.fontFamily.sans,
+        notFoundBox: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            padding: 10,
+            borderRadius: radii.controls,
+            borderWidth: 1,
+            marginTop: 10,
         },
-        userMessageText: {
-            fontSize: 16,
-            color: colors.accent,
-            fontWeight: '600',
+        notFoundText: {
+            fontSize: typography.sizes.xs,
+            lineHeight: 18,
+            flex: 1,
         },
         citationsRow: {
             flexDirection: 'row',
             flexWrap: 'wrap',
             gap: 6,
-            marginTop: 8,
+            marginTop: 12,
+            paddingTop: 8,
+            borderTopWidth: 1,
+            borderTopColor: colors.border,
         },
         citationChip: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.accentMuted,
             paddingVertical: 4,
             paddingHorizontal: 8,
-            borderRadius: radii.xs,
+            borderRadius: radii.full,
         },
         citationChipText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            color: colors.accent,
+            fontWeight: '700',
         },
-        msgActionsRow: {
+        msgToolbar: {
             flexDirection: 'row',
-            gap: 8,
-            marginTop: 8,
+            alignItems: 'center',
+            gap: 12,
+            marginTop: 10,
+            paddingTop: 6,
         },
-        msgActionBtn: {
+        toolbarBtn: {
             padding: 4,
         },
-        streamingIndicator: {
+        typingBubbleWrapper: {
+            alignItems: 'flex-start',
+            marginVertical: 6,
+        },
+        typingBubble: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 8,
+            gap: 5,
+            paddingHorizontal: 14,
+            paddingVertical: 12,
+            borderRadius: radii.full,
+            borderWidth: 1,
+        },
+        typingDot: {
+            width: 7,
+            height: 7,
+            borderRadius: 3.5,
+        },
+        starterBlock: {
+            marginTop: 20,
+        },
+        starterHeading: {
+            fontSize: typography.sizes.xs + 1,
+            fontWeight: '800',
+            color: colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 0.6,
+            marginBottom: 10,
+        },
+        starterGrid: {
             gap: 8,
         },
-        streamingText: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-        },
-        composerWrapper: {
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: colors.surface,
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
-            paddingHorizontal: 16,
-            paddingVertical: 10,
-        },
-        indexingNotice: {
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 12,
+        starterChip: {
+            flexDirection: 'row',
             alignItems: 'center',
-            borderRadius: radii.sm,
+            padding: 12,
+            borderRadius: radii.controls,
+            borderWidth: 1,
         },
-        indexingNoticeText: {
+        starterChipText: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '600',
+            flex: 1,
+        },
+        jumpBottomBtn: {
+            position: 'absolute',
+            bottom: 84,
+            alignSelf: 'center',
+            flexDirection: 'row',
+            alignItems: 'center',
+            paddingVertical: 6,
+            paddingHorizontal: 12,
+            borderRadius: radii.full,
+            borderWidth: 1,
+            borderColor: colors.border,
+            zIndex: 99,
+        },
+        jumpBottomText: {
             fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            fontWeight: '500',
+            fontWeight: '700',
         },
         composerContainer: {
             flexDirection: 'row',
             alignItems: 'center',
+            borderWidth: 1,
+            borderRadius: radii.sheets,
+            marginHorizontal: 16,
+            marginBottom: 75,
+            paddingHorizontal: 14,
+            paddingVertical: 6,
         },
         composerInput: {
             flex: 1,
-            backgroundColor: colors.surfaceRaised,
-            borderRadius: radii.full,
-            paddingHorizontal: 16,
-            paddingVertical: 10,
+            maxHeight: 120,
             fontSize: typography.sizes.sm,
-            color: colors.text,
-            marginRight: 10,
-            maxHeight: 100,
+            paddingVertical: 6,
         },
-        composerBtn: {
+        sendBtn: {
             width: 38,
             height: 38,
             borderRadius: 19,
             alignItems: 'center',
             justifyContent: 'center',
+            marginLeft: 8,
+        },
+        stopBtn: {
+            width: 38,
+            height: 38,
+            borderRadius: 19,
+            alignItems: 'center',
+            justifyContent: 'center',
+            marginLeft: 8,
         },
         modalOverlay: {
             flex: 1,
@@ -782,46 +890,53 @@ const createStyles = (colors: ThemeColors) =>
             alignItems: 'center',
             padding: 20,
         },
-        scopePickerModalCard: {
+        scopeModalCard: {
             width: '100%',
-            maxWidth: 360,
+            maxWidth: 380,
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.sheets,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 20,
+            padding: 22,
         },
         scopeModalTitle: {
-            fontSize: typography.sizes.md,
-            fontWeight: '700',
+            fontSize: typography.sizes.md + 1,
+            fontWeight: '800',
             color: colors.text,
-            marginBottom: 12,
         },
-        scopeSubheader: {
+        scopeModalSub: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
             color: colors.textMuted,
+            marginTop: 4,
+            marginBottom: 16,
+        },
+        scopeGroupLabel: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
+            color: colors.textMuted,
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
             marginTop: 12,
             marginBottom: 6,
         },
-        scopeOptionRow: {
+        scopeOptionCard: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 10,
-            paddingHorizontal: 8,
-            borderRadius: radii.sm,
+            padding: 12,
+            borderRadius: radii.controls,
+            borderWidth: 1,
+            borderColor: colors.border,
+            marginBottom: 8,
         },
-        scopeOptionActive: {
-            backgroundColor: colors.surfaceRaised,
-        },
-        scopeOptionName: {
+        scopeOptionTitle: {
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.text,
         },
         scopeOptionDesc: {
             fontSize: typography.sizes.xs,
             color: colors.textMuted,
+            marginTop: 2,
         },
     });
 

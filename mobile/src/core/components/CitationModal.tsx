@@ -1,13 +1,16 @@
 import React from 'react';
-import { View, Text, Modal, TouchableOpacity, ScrollView, StyleSheet } from 'react-native';
+import { View, Text, Modal, ScrollView, StyleSheet } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
-import { BookOpen, X, Sparkles } from 'lucide-react-native';
+import { BookOpen, X, Sparkles, ExternalLink } from 'lucide-react-native';
+import { AnimatedPressable } from './AnimatedPressable';
 
 interface CitationModalProps {
     visible: boolean;
     citationText: string;
     onClose: () => void;
     documentTitle?: string;
+    pageNumber?: number;
+    onJumpToPage?: (page: number) => void;
 }
 
 export const CitationModal: React.FC<CitationModalProps> = ({
@@ -15,6 +18,8 @@ export const CitationModal: React.FC<CitationModalProps> = ({
     citationText,
     onClose,
     documentTitle,
+    pageNumber,
+    onJumpToPage,
 }) => {
     const { colors, typography, radii, spacing, shadows } = useTheme();
 
@@ -36,9 +41,9 @@ export const CitationModal: React.FC<CitationModalProps> = ({
                     style={[
                         styles.card,
                         {
-                            backgroundColor: colors.surfaceRaised,
-                            borderColor: colors.borderLight,
-                            borderRadius: radii.xl,
+                            backgroundColor: colors.surface,
+                            borderColor: colors.border,
+                            borderRadius: radii.sheets,
                             padding: spacing.lg,
                             ...shadows.modal,
                         },
@@ -50,12 +55,12 @@ export const CitationModal: React.FC<CitationModalProps> = ({
                             <View
                                 style={[
                                     styles.iconBg,
-                                    { backgroundColor: colors.accentMuted, borderRadius: radii.sm },
+                                    { backgroundColor: colors.primaryMuted, borderRadius: radii.controls },
                                 ]}
                             >
-                                <BookOpen size={18} color={colors.accent} />
+                                <BookOpen size={20} color={colors.primary} strokeWidth={1.75} />
                             </View>
-                            <View style={{ marginLeft: 10, flex: 1 }}>
+                            <View style={{ marginLeft: 12, flex: 1 }}>
                                 <Text
                                     style={[
                                         styles.headerTitle,
@@ -72,20 +77,20 @@ export const CitationModal: React.FC<CitationModalProps> = ({
                                     ]}
                                     numberOfLines={1}
                                 >
-                                    {filename} {chunkNum ? `• Chunk #${chunkNum}` : ''}
+                                    {filename} {pageNumber ? `• Page ${pageNumber}` : chunkNum ? `• Chunk #${chunkNum}` : ''}
                                 </Text>
                             </View>
                         </View>
-                        <TouchableOpacity
+                        <AnimatedPressable
                             onPress={onClose}
                             style={[
                                 styles.closeBtn,
-                                { backgroundColor: colors.surfaceSubtle, borderRadius: radii.full },
+                                { backgroundColor: colors.surfaceRaised, borderRadius: radii.full },
                             ]}
-                            activeOpacity={0.7}
+                            accessibilityLabel="Close source citation preview"
                         >
-                            <X size={18} color={colors.textMuted} />
-                        </TouchableOpacity>
+                            <X size={18} color={colors.textMuted} strokeWidth={2} />
+                        </AnimatedPressable>
                     </View>
 
                     {/* Excerpt Body */}
@@ -97,33 +102,33 @@ export const CitationModal: React.FC<CitationModalProps> = ({
                             style={[
                                 styles.highlightCard,
                                 {
-                                    backgroundColor: colors.surfaceSubtle,
+                                    backgroundColor: colors.surfaceRaised,
                                     borderColor: colors.border,
-                                    borderLeftColor: colors.accent,
-                                    borderRadius: radii.md,
+                                    borderLeftColor: colors.primary,
+                                    borderRadius: radii.cards,
                                     padding: spacing.md,
                                     marginBottom: spacing.sm,
                                 },
                             ]}
                         >
                             <View style={[styles.badgeRow, { marginBottom: spacing.xs }]}>
-                                <Sparkles size={12} color={colors.indigo} />
+                                <Sparkles size={13} color={colors.primary} strokeWidth={2} />
                                 <Text
                                     style={[
                                         styles.badgeText,
-                                        { color: colors.indigo, fontSize: typography.sizes.xs },
+                                        { color: colors.primary, fontSize: typography.sizes.xs },
                                     ]}
                                 >
-                                    Verified Vector Chunk
+                                    Verified Source Chunk
                                 </Text>
                             </View>
                             <Text
                                 style={[
                                     styles.excerptText,
-                                    { color: colors.textSecondary, fontSize: typography.sizes.sm },
+                                    { color: colors.text, fontSize: typography.sizes.sm },
                                 ]}
                             >
-                                {excerpt}
+                                "{excerpt}"
                             </Text>
                         </View>
                         <Text
@@ -132,33 +137,56 @@ export const CitationModal: React.FC<CitationModalProps> = ({
                                 { color: colors.textSubtle, fontSize: typography.sizes.xs, marginTop: spacing.xs },
                             ]}
                         >
-                            This passage was retrieved from the vector knowledge base to support the AI answer.
+                            This grounded context was retrieved directly from your course PDF to verify the AI response.
                         </Text>
                     </ScrollView>
 
-                    {/* Dismiss Button */}
-                    <TouchableOpacity
-                        style={[
-                            styles.doneBtn,
-                            {
-                                backgroundColor: colors.accent,
-                                borderRadius: radii.md,
-                                marginTop: spacing.md,
-                                ...shadows.glowAccent,
-                            },
-                        ]}
-                        onPress={onClose}
-                        activeOpacity={0.8}
-                    >
-                        <Text
+                    {/* Action Buttons */}
+                    <View style={{ flexDirection: 'row', gap: 10, marginTop: spacing.md }}>
+                        {pageNumber && onJumpToPage && (
+                            <AnimatedPressable
+                                style={[
+                                    styles.jumpBtn,
+                                    {
+                                        backgroundColor: colors.surfaceRaised,
+                                        borderColor: colors.border,
+                                        borderRadius: radii.controls,
+                                    },
+                                ]}
+                                onPress={() => {
+                                    onJumpToPage(pageNumber);
+                                    onClose();
+                                }}
+                            >
+                                <ExternalLink size={15} color={colors.primary} strokeWidth={2} style={{ marginRight: 6 }} />
+                                <Text style={[styles.jumpBtnText, { color: colors.primary }]}>
+                                    Jump to Page {pageNumber}
+                                </Text>
+                            </AnimatedPressable>
+                        )}
+
+                        <AnimatedPressable
                             style={[
-                                styles.doneBtnText,
-                                { color: colors.textInverse, fontSize: typography.sizes.sm },
+                                styles.doneBtn,
+                                {
+                                    backgroundColor: colors.primary,
+                                    borderRadius: radii.controls,
+                                    flex: 1,
+                                    ...shadows.glowAccent,
+                                },
                             ]}
+                            onPress={onClose}
                         >
-                            Close Source Preview
-                        </Text>
-                    </TouchableOpacity>
+                            <Text
+                                style={[
+                                    styles.doneBtnText,
+                                    { color: colors.textInverse, fontSize: typography.sizes.sm },
+                                ]}
+                            >
+                                Close Preview
+                            </Text>
+                        </AnimatedPressable>
+                    </View>
                 </View>
             </View>
         </Modal>
@@ -189,8 +217,8 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     iconBg: {
-        width: 36,
-        height: 36,
+        width: 40,
+        height: 40,
         justifyContent: 'center',
         alignItems: 'center',
     },
@@ -198,11 +226,11 @@ const styles = StyleSheet.create({
         fontWeight: '700',
     },
     headerSub: {
-        marginTop: 1,
+        marginTop: 2,
     },
     closeBtn: {
-        width: 32,
-        height: 32,
+        width: 34,
+        height: 34,
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 8,
@@ -210,7 +238,7 @@ const styles = StyleSheet.create({
     contentScroll: {},
     highlightCard: {
         borderWidth: 1,
-        borderLeftWidth: 3,
+        borderLeftWidth: 4,
     },
     badgeRow: {
         flexDirection: 'row',
@@ -218,21 +246,35 @@ const styles = StyleSheet.create({
     },
     badgeText: {
         fontWeight: '700',
-        marginLeft: 4,
+        marginLeft: 6,
         textTransform: 'uppercase',
         letterSpacing: 0.5,
     },
     excerptText: {
         lineHeight: 22,
         fontStyle: 'normal',
+        marginTop: 4,
     },
     helperNote: {
         textAlign: 'center',
-        lineHeight: 16,
+        lineHeight: 18,
+    },
+    jumpBtn: {
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        paddingVertical: 12,
+        paddingHorizontal: 16,
+        borderWidth: 1,
+    },
+    jumpBtnText: {
+        fontSize: 13,
+        fontWeight: '700',
     },
     doneBtn: {
-        paddingVertical: 12,
+        paddingVertical: 13,
         alignItems: 'center',
+        justifyContent: 'center',
     },
     doneBtnText: {
         fontWeight: '700',

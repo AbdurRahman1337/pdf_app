@@ -10,9 +10,12 @@ import {
     typography,
     spacing,
     radii,
+    gradients,
 } from './tokens';
+import { motion } from './motion';
 
 export type ThemeMode = 'dark' | 'light' | 'system';
+export type TabKey = 'library' | 'courses' | 'test' | 'tutor';
 
 export interface ThemeContextValue {
     themeMode: ThemeMode;
@@ -22,6 +25,9 @@ export interface ThemeContextValue {
     typography: typeof typography;
     spacing: typeof spacing;
     radii: typeof radii;
+    gradients: typeof gradients;
+    motion: typeof motion;
+    getTabAccent: (tab: TabKey) => string;
     setThemeMode: (mode: ThemeMode) => Promise<void>;
     toggleTheme: () => Promise<void>;
 }
@@ -32,7 +38,7 @@ const ThemeContext = createContext<ThemeContextValue | undefined>(undefined);
 
 export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
     const systemScheme = useColorScheme();
-    const [themeMode, setThemeModeState] = useState<ThemeMode>('dark');
+    const [themeMode, setThemeModeState] = useState<ThemeMode>('light');
     const [loaded, setLoaded] = useState(false);
 
     useEffect(() => {
@@ -43,7 +49,7 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
                     setThemeModeState(stored);
                 }
             } catch (err) {
-                console.error('[Theme] Failed to load theme preference from storage:', err);
+                console.error('[Theme] Failed to load theme preference:', err);
             } finally {
                 setLoaded(true);
             }
@@ -76,6 +82,21 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
     const activeColors = useMemo(() => (isDark ? darkColors : lightColors), [isDark]);
     const activeShadows = useMemo(() => (isDark ? darkShadows : lightShadows), [isDark]);
 
+    const getTabAccent = (tab: TabKey) => {
+        switch (tab) {
+            case 'library':
+                return activeColors.tabLibrary;
+            case 'courses':
+                return activeColors.tabCourseHub;
+            case 'test':
+                return activeColors.tabExamPrep;
+            case 'tutor':
+                return activeColors.tabAITutor;
+            default:
+                return activeColors.primary;
+        }
+    };
+
     const value = useMemo<ThemeContextValue>(() => ({
         themeMode,
         isDark,
@@ -84,6 +105,9 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
         typography,
         spacing,
         radii,
+        gradients,
+        motion,
+        getTabAccent,
         setThemeMode,
         toggleTheme,
     }), [themeMode, isDark, activeColors, activeShadows]);
@@ -98,15 +122,17 @@ export const ThemeProvider: React.FC<{ children: ReactNode }> = ({ children }) =
 export const useTheme = (): ThemeContextValue => {
     const context = useContext(ThemeContext);
     if (!context) {
-        // Fallback gracefully to default dark values if used outside provider
         return {
-            themeMode: 'dark',
-            isDark: true,
-            colors: darkColors,
-            shadows: darkShadows,
+            themeMode: 'light',
+            isDark: false,
+            colors: lightColors,
+            shadows: lightShadows,
             typography,
             spacing,
             radii,
+            gradients,
+            motion,
+            getTabAccent: () => lightColors.primary,
             setThemeMode: async () => {},
             toggleTheme: async () => {},
         };

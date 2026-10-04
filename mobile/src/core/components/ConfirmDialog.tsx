@@ -1,8 +1,10 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import { View, Text, StyleSheet, Modal, Animated } from 'react-native';
 import { AlertTriangle, Trash2, X } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
-import { ThemeColors, radii, typography } from '../theme/tokens';
+import { ThemeColors } from '../theme/tokens';
+import { motion, triggerHaptic, getIsReducedMotion } from '../theme/motion';
+import { AnimatedPressable } from './AnimatedPressable';
 
 export interface ConfirmDialogProps {
     visible: boolean;
@@ -27,8 +29,36 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
     onConfirm,
     onCancel,
 }) => {
-    const { colors, shadows } = useTheme();
-    const styles = createStyles(colors);
+    const { colors, shadows, radii, typography } = useTheme();
+    const styles = createStyles(colors, radii, typography);
+
+    const translateY = useRef(new Animated.Value(40)).current;
+    const opacity = useRef(new Animated.Value(0)).current;
+
+    useEffect(() => {
+        if (visible) {
+            triggerHaptic('warning');
+            if (getIsReducedMotion()) {
+                translateY.setValue(0);
+                opacity.setValue(1);
+            } else {
+                translateY.setValue(40);
+                opacity.setValue(0);
+                Animated.parallel([
+                    Animated.timing(opacity, {
+                        toValue: 1,
+                        duration: motion.durations.standard,
+                        useNativeDriver: true,
+                    }),
+                    Animated.spring(translateY, {
+                        toValue: 0,
+                        ...motion.springs.sheet,
+                        useNativeDriver: true,
+                    }),
+                ]).start();
+            }
+        }
+    }, [visible]);
 
     if (!visible) return null;
 
@@ -36,11 +66,20 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
         <Modal
             transparent
             visible={visible}
-            animationType="fade"
+            animationType="none"
             onRequestClose={onCancel}
         >
             <View style={styles.overlay}>
-                <View style={[styles.dialogCard, shadows.modal]}>
+                <Animated.View
+                    style={[
+                        styles.dialogCard,
+                        shadows.modal,
+                        {
+                            opacity,
+                            transform: [{ translateY }],
+                        },
+                    ]}
+                >
                     <View style={styles.header}>
                         <View
                             style={[
@@ -48,23 +87,23 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                                 {
                                     backgroundColor: isDestructive
                                         ? colors.dangerMuted
-                                        : colors.accentMuted,
+                                        : colors.warningMuted,
                                 },
                             ]}
                         >
                             {isDestructive ? (
-                                <Trash2 size={20} color={colors.danger} strokeWidth={1.5} />
+                                <Trash2 size={22} color={colors.danger} strokeWidth={1.75} />
                             ) : (
-                                <AlertTriangle size={20} color={colors.accent} strokeWidth={1.5} />
+                                <AlertTriangle size={22} color={colors.warning} strokeWidth={1.75} />
                             )}
                         </View>
-                        <TouchableOpacity
+                        <AnimatedPressable
                             onPress={onCancel}
                             style={styles.closeBtn}
                             accessibilityLabel="Close dialog"
                         >
-                            <X size={18} color={colors.textMuted} />
-                        </TouchableOpacity>
+                            <X size={18} color={colors.textMuted} strokeWidth={2} />
+                        </AnimatedPressable>
                     </View>
 
                     <Text style={styles.title}>{title}</Text>
@@ -82,22 +121,22 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                     ) : null}
 
                     <View style={styles.buttonRow}>
-                        <TouchableOpacity
+                        <AnimatedPressable
                             style={[styles.btn, styles.cancelBtn]}
                             onPress={onCancel}
-                            activeOpacity={0.7}
                             accessibilityRole="button"
                         >
                             <Text style={styles.cancelText}>{cancelText}</Text>
-                        </TouchableOpacity>
+                        </AnimatedPressable>
 
-                        <TouchableOpacity
+                        <AnimatedPressable
                             style={[
                                 styles.btn,
                                 isDestructive ? styles.destructiveBtn : styles.confirmBtn,
                             ]}
                             onPress={onConfirm}
-                            activeOpacity={0.8}
+                            hapticFeedback={true}
+                            hapticType={isDestructive ? 'error' : 'success'}
                             accessibilityRole="button"
                         >
                             <Text
@@ -108,72 +147,74 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                             >
                                 {confirmText}
                             </Text>
-                        </TouchableOpacity>
+                        </AnimatedPressable>
                     </View>
-                </View>
+                </Animated.View>
             </View>
         </Modal>
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, radii: any, typography: any) =>
     StyleSheet.create({
         overlay: {
             flex: 1,
             backgroundColor: colors.overlay,
             justifyContent: 'center',
             alignItems: 'center',
-            padding: 24,
+            padding: 20,
         },
         dialogCard: {
             width: '100%',
             maxWidth: 380,
             backgroundColor: colors.surface,
-            borderRadius: radii.xl,
+            borderRadius: radii.sheets,
             borderWidth: 1,
             borderColor: colors.border,
-            padding: 20,
+            padding: 24,
         },
         header: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 14,
+            marginBottom: 16,
         },
         iconContainer: {
-            width: 40,
-            height: 40,
-            borderRadius: 20,
+            width: 44,
+            height: 44,
+            borderRadius: 22,
             alignItems: 'center',
             justifyContent: 'center',
         },
         closeBtn: {
             padding: 6,
+            borderRadius: radii.full,
         },
         title: {
             fontSize: typography.sizes.lg,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.text,
             marginBottom: 8,
+            letterSpacing: -0.2,
         },
         message: {
             fontSize: typography.sizes.sm,
             color: colors.textMuted,
-            lineHeight: 20,
-            marginBottom: 12,
+            lineHeight: 22,
+            marginBottom: 14,
         },
         itemBadge: {
             backgroundColor: colors.surfaceRaised,
-            paddingVertical: 8,
-            paddingHorizontal: 12,
-            borderRadius: radii.sm,
+            paddingVertical: 10,
+            paddingHorizontal: 14,
+            borderRadius: radii.controls,
             marginBottom: 20,
             borderWidth: 1,
             borderColor: colors.border,
         },
         itemName: {
             fontSize: typography.sizes.sm,
-            fontWeight: '500',
+            fontWeight: '600',
             color: colors.text,
         },
         buttonRow: {
@@ -182,10 +223,10 @@ const createStyles = (colors: ThemeColors) =>
             justifyContent: 'flex-end',
         },
         btn: {
-            paddingVertical: 10,
-            paddingHorizontal: 16,
-            borderRadius: radii.sm,
-            minHeight: 44,
+            paddingVertical: 12,
+            paddingHorizontal: 18,
+            borderRadius: radii.controls,
+            minHeight: 46,
             justifyContent: 'center',
             alignItems: 'center',
         },
@@ -196,20 +237,19 @@ const createStyles = (colors: ThemeColors) =>
         },
         cancelText: {
             fontSize: typography.sizes.sm,
-            fontWeight: '500',
+            fontWeight: '600',
             color: colors.textSecondary,
         },
         confirmBtn: {
-            backgroundColor: colors.accent,
+            backgroundColor: colors.primary,
         },
         destructiveBtn: {
             backgroundColor: colors.danger,
         },
         confirmText: {
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontWeight: '700',
         },
     });
 
 export default ConfirmDialog;
-

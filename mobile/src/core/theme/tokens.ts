@@ -1,65 +1,75 @@
 import { Platform } from 'react-native';
 
 /**
- * Editorial Design Tokens for PDF AI Study App
- * Designed for calm reading and revision.
- * WCAG AA Contrast verified.
+ * Design Tokens for PDF AI Student Study App
+ * Compliant with DESIGN.md and Modern Consumer Ed-Tech UI/UX standards.
+ * WCAG AA Contrast verified in both Light and Dark themes.
  */
 
 export interface ThemeColors {
     // Canvas & Surfaces
-    bg: string;
-    surface: string;
-    surfaceRaised: string;
-    surfaceSubtle: string;
-    surfaceHover: string;
-    pdfPaper: string;
+    bg: string;              // Light: #F4F7F6 | Dark: #0B1211
+    surface: string;         // Light: #FFFFFF | Dark: #121C1A
+    surfaceRaised: string;   // Light: #EAF1EF | Dark: #192724 (surface-alt)
+    surfaceSubtle: string;   // Light: #E4ECE9 | Dark: #1F302C
+    surfaceHover: string;    // Light: #DEE8E5 | Dark: #283D38
+    pdfPaper: string;        // #FDFCF7 (stays paper-toned in both modes)
 
     // Borders & Dividers
-    border: string;
-    borderLight: string;
-    borderActive: string;
+    border: string;          // Light: #DCE6E3 | Dark: #243531
+    borderLight: string;     // Subtle hairline border
+    borderActive: string;    // Focused/selected border
 
     // Typography
-    text: string;
-    textSecondary: string;
-    textMuted: string;
-    textSubtle: string;
-    textInverse: string;
+    text: string;            // Light: #0F1A18 | Dark: #E8F0EE
+    textSecondary: string;   // Light: #364441 | Dark: #BAC8C4
+    textMuted: string;       // Light: #5B6B67 | Dark: #94A8A3
+    textSubtle: string;      // Light: #7A8D89 | Dark: #70847F
+    textInverse: string;     // High-contrast inverse text
 
-    // Primary Interactive Accent (Editorial Spruce / Seafoam)
+    // Primary Accents
+    primary: string;         // Ocean Teal (Light: #0D9488 | Dark: #2DD4BF)
+    primaryMuted: string;
+    primaryBorder: string;
+
+    secondary: string;       // Sunrise Coral (Light: #FF6B57 | Dark: #FF8A78)
+    secondaryMuted: string;
+
+    tertiary: string;        // Sun Yellow (Light: #FFC857 | Dark: #FFD878)
+    tertiaryMuted: string;
+
+    // Legacy/Main Interactive Accent (maps to primary Ocean Teal)
     accent: string;
     accentLight: string;
     accentDark: string;
     accentMuted: string;
     accentBorder: string;
 
-    // Secondary Accents & Helpers
-    indigo: string;
-    indigoMuted: string;
-    teal: string;
-    tealMuted: string;
-    purple: string;
-    purpleMuted: string;
+    // Per-Tab Specific Accents
+    tabLibrary: string;      // Teal #0D9488 (Dark: #2DD4BF)
+    tabCourseHub: string;    // Blue #2F6FED (Dark: #60A5FA)
+    tabExamPrep: string;     // Coral #F2644A (Dark: #FF8A78)
+    tabAITutor: string;      // Violet #7C5CFA (Dark: #A78BFA)
 
     // Feedback & Semantics
-    success: string;
+    success: string;         // Light: #16A34A | Dark: #34D399
     successMuted: string;
-    warning: string;
+    warning: string;         // Light: #D97706 | Dark: #FBBF24
     warningMuted: string;
-    danger: string;
+    error: string;           // Light: #DC2626 | Dark: #F87171
+    danger: string;          // Alias for error
     dangerMuted: string;
     info: string;
 
     // Citations & Highlights
-    highlight: string;
-    highlightText: string;
+    highlight: string;       // Light: #FFE58A | Dark: #5C4A00
+    highlightText: string;   // Light: #4A3B00 | Dark: #FFE58A
 
-    // Overlays
+    // Overlays & Scrims
     overlay: string;
     overlaySubtle: string;
 
-    // Floating UI
+    // Floating UI Elements
     floatingBg: string;
     floatingBorder: string;
     floatingShadow: string;
@@ -67,130 +77,170 @@ export interface ThemeColors {
 
 export const lightColors: ThemeColors = {
     // Canvas & Surfaces
-    bg: '#F7F5F0',          // Warm Paper
-    surface: '#FFFFFF',     // Clean White Surface
-    surfaceRaised: '#F0EDE6',// Subtle elevated container
-    surfaceSubtle: '#EBE7DE',
-    surfaceHover: '#E5E1D7',
-    pdfPaper: '#FDFCF7',    // Warm Paper Page
+    bg: '#F4F7F6',
+    surface: '#FFFFFF',
+    surfaceRaised: '#EAF1EF',
+    surfaceSubtle: '#E4ECE9',
+    surfaceHover: '#DEE8E5',
+    pdfPaper: '#FDFCF7',
 
     // Borders & Dividers
-    border: '#E4E0D6',
-    borderLight: 'rgba(28, 27, 24, 0.08)',
-    borderActive: '#0F6B5C',
+    border: '#DCE6E3',
+    borderLight: 'rgba(15, 26, 24, 0.06)',
+    borderActive: '#0D9488',
 
     // Typography
-    text: '#1C1B18',        // High-contrast ink
-    textSecondary: '#423F39',
-    textMuted: '#6B675E',    // Editorial Muted
-    textSubtle: '#8C877D',
+    text: '#0F1A18',
+    textSecondary: '#364441',
+    textMuted: '#5B6B67',
+    textSubtle: '#7A8D89',
     textInverse: '#FFFFFF',
 
-    // Primary Interactive Accent (Spruce)
-    accent: '#0F6B5C',
-    accentLight: '#188A77',
-    accentDark: '#0A4A40',
-    accentMuted: 'rgba(15, 107, 92, 0.10)',
-    accentBorder: 'rgba(15, 107, 92, 0.25)',
+    // Primary Accents
+    primary: '#0D9488',
+    primaryMuted: 'rgba(13, 148, 136, 0.12)',
+    primaryBorder: 'rgba(13, 148, 136, 0.28)',
 
-    // Secondary Accent Aliases
-    indigo: '#0F6B5C',
-    indigoMuted: 'rgba(15, 107, 92, 0.10)',
-    teal: '#0F6B5C',
-    tealMuted: 'rgba(15, 107, 92, 0.10)',
-    purple: '#0A4A40',
-    purpleMuted: 'rgba(10, 74, 64, 0.10)',
+    secondary: '#FF6B57',
+    secondaryMuted: 'rgba(255, 107, 87, 0.12)',
+
+    tertiary: '#FFC857',
+    tertiaryMuted: 'rgba(255, 200, 87, 0.18)',
+
+    // Main Interactive Accent
+    accent: '#0D9488',
+    accentLight: '#14B8A6',
+    accentDark: '#0F766E',
+    accentMuted: 'rgba(13, 148, 136, 0.12)',
+    accentBorder: 'rgba(13, 148, 136, 0.28)',
+
+    // Per-Tab Accents
+    tabLibrary: '#0D9488',
+    tabCourseHub: '#2F6FED',
+    tabExamPrep: '#F2644A',
+    tabAITutor: '#7C5CFA',
 
     // Feedback & Semantics
-    success: '#2E7D4F',
-    successMuted: 'rgba(46, 125, 79, 0.12)',
-    warning: '#B7791F',
-    warningMuted: 'rgba(183, 121, 31, 0.12)',
-    danger: '#B3402F',
-    dangerMuted: 'rgba(179, 64, 47, 0.12)',
-    info: '#0F6B5C',
+    success: '#16A34A',
+    successMuted: 'rgba(22, 163, 74, 0.12)',
+    warning: '#D97706',
+    warningMuted: 'rgba(217, 119, 6, 0.12)',
+    error: '#DC2626',
+    danger: '#DC2626',
+    dangerMuted: 'rgba(220, 38, 38, 0.12)',
+    info: '#2F6FED',
 
     // Citations & Highlights
     highlight: '#FFE58A',
     highlightText: '#4A3B00',
 
     // Overlays
-    overlay: 'rgba(28, 27, 24, 0.55)',
-    overlaySubtle: 'rgba(28, 27, 24, 0.25)',
+    overlay: 'rgba(15, 26, 24, 0.55)',
+    overlaySubtle: 'rgba(15, 26, 24, 0.25)',
 
     // Floating UI
     floatingBg: '#FFFFFF',
-    floatingBorder: '#E4E0D6',
-    floatingShadow: '#6B675E',
+    floatingBorder: '#DCE6E3',
+    floatingShadow: '#0F1A18',
 };
 
 export const darkColors: ThemeColors = {
-    // Canvas & Surfaces
-    bg: '#121413',          // Deep Calm Neutral
-    surface: '#1A1D1B',     // Elevated Dark Surface
-    surfaceRaised: '#222624',
-    surfaceSubtle: '#1E211F',
-    surfaceHover: '#282C2A',
-    pdfPaper: '#FDFCF7',    // PDF page stays paper-toned even in dark mode!
+    // Canvas & Surfaces (Avoid pure black)
+    bg: '#0B1211',
+    surface: '#121C1A',
+    surfaceRaised: '#192724',
+    surfaceSubtle: '#1F302C',
+    surfaceHover: '#283D38',
+    pdfPaper: '#FDFCF7', // Stays paper-toned in dark mode!
 
     // Borders & Dividers
-    border: '#2E3330',
-    borderLight: 'rgba(236, 234, 228, 0.08)',
-    borderActive: '#4DB8A3',
+    border: '#243531',
+    borderLight: 'rgba(232, 240, 238, 0.08)',
+    borderActive: '#2DD4BF',
 
     // Typography
-    text: '#ECEAE4',        // Crisp Parchment
-    textSecondary: '#C8C5BD',
-    textMuted: '#A09C92',    // Dark Muted
-    textSubtle: '#78746B',
-    textInverse: '#121413',
+    text: '#E8F0EE',
+    textSecondary: '#BAC8C4',
+    textMuted: '#94A8A3',
+    textSubtle: '#70847F',
+    textInverse: '#0B1211',
 
-    // Primary Interactive Accent (Seafoam / soft luminous spruce)
-    accent: '#4DB8A3',
-    accentLight: '#73CCBC',
-    accentDark: '#2E8C7A',
-    accentMuted: 'rgba(77, 184, 163, 0.14)',
-    accentBorder: 'rgba(77, 184, 163, 0.32)',
+    // Primary Accents
+    primary: '#2DD4BF',
+    primaryMuted: 'rgba(45, 212, 191, 0.15)',
+    primaryBorder: 'rgba(45, 212, 191, 0.35)',
 
-    // Secondary Accent Aliases
-    indigo: '#4DB8A3',
-    indigoMuted: 'rgba(77, 184, 163, 0.14)',
-    teal: '#4DB8A3',
-    tealMuted: 'rgba(77, 184, 163, 0.14)',
-    purple: '#2E8C7A',
-    purpleMuted: 'rgba(46, 140, 122, 0.14)',
+    secondary: '#FF8A78',
+    secondaryMuted: 'rgba(255, 138, 120, 0.16)',
+
+    tertiary: '#FFD878',
+    tertiaryMuted: 'rgba(255, 216, 120, 0.18)',
+
+    // Main Interactive Accent
+    accent: '#2DD4BF',
+    accentLight: '#5EEAD4',
+    accentDark: '#0D9488',
+    accentMuted: 'rgba(45, 212, 191, 0.15)',
+    accentBorder: 'rgba(45, 212, 191, 0.35)',
+
+    // Per-Tab Accents
+    tabLibrary: '#2DD4BF',
+    tabCourseHub: '#60A5FA',
+    tabExamPrep: '#FF8A78',
+    tabAITutor: '#A78BFA',
 
     // Feedback & Semantics
-    success: '#3FA86B',
-    successMuted: 'rgba(63, 168, 107, 0.14)',
-    warning: '#DE9A3A',
-    warningMuted: 'rgba(222, 154, 58, 0.14)',
-    danger: '#E05A47',
-    dangerMuted: 'rgba(224, 90, 71, 0.14)',
-    info: '#4DB8A3',
+    success: '#34D399',
+    successMuted: 'rgba(52, 211, 153, 0.15)',
+    warning: '#FBBF24',
+    warningMuted: 'rgba(251, 191, 36, 0.15)',
+    error: '#F87171',
+    danger: '#F87171',
+    dangerMuted: 'rgba(248, 113, 113, 0.15)',
+    info: '#60A5FA',
 
     // Citations & Highlights
     highlight: '#5C4A00',
     highlightText: '#FFE58A',
 
     // Overlays
-    overlay: 'rgba(10, 12, 11, 0.75)',
-    overlaySubtle: 'rgba(10, 12, 11, 0.45)',
+    overlay: 'rgba(5, 10, 9, 0.78)',
+    overlaySubtle: 'rgba(5, 10, 9, 0.45)',
 
     // Floating UI
-    floatingBg: '#1A1D1B',
-    floatingBorder: '#2E3330',
+    floatingBg: '#121C1A',
+    floatingBorder: '#243531',
     floatingShadow: '#000000',
 };
 
-// Default fallback
-export const colors = lightColors;
+// Gradients pairs defined in DESIGN.md
+export const gradients = {
+    tealToBlue: {
+        light: ['#0D9488', '#2F6FED'] as const,
+        dark: ['#14B8A6', '#3B82F6'] as const,
+    },
+    coralToYellow: {
+        light: ['#F2644A', '#FFC857'] as const,
+        dark: ['#FF6B57', '#FBBF24'] as const,
+    },
+    violetToIndigo: {
+        light: ['#7C5CFA', '#2F6FED'] as const,
+        dark: ['#A78BFA', '#60A5FA'] as const,
+    },
+    cardCoverGradients: [
+        ['#0D9488', '#2F6FED'],
+        ['#F2644A', '#FFC857'],
+        ['#7C5CFA', '#3B82F6'],
+        ['#10B981', '#06B6D4'],
+        ['#EC4899', '#8B5CF6'],
+    ] as const,
+};
 
 export const typography = {
     fontFamily: {
         sans: Platform.select({ ios: 'System', android: 'Roboto', default: 'sans-serif' }),
         serif: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
-        regular: Platform.select({ ios: 'System', android: 'Roboto', default: 'sans-serif' }),
+        reading: Platform.select({ ios: 'Georgia', android: 'serif', default: 'serif' }),
         medium: Platform.select({ ios: 'System', android: 'Roboto', default: 'sans-serif' }),
         semiBold: Platform.select({ ios: 'System', android: 'Roboto', default: 'sans-serif' }),
         bold: Platform.select({ ios: 'System', android: 'Roboto', default: 'sans-serif' }),
@@ -199,16 +249,22 @@ export const typography = {
         xs: 12,
         sm: 14,
         md: 16,
-        base: 16,
         lg: 20,
-        xl: 28,
-        xxl: 28,
-        display: 34,
+        xl: 24,
+        xxl: 32,
+        display: 40,
     },
     lineHeights: {
-        tight: 1.25,
+        tight: 1.2,
         normal: 1.45,
-        reading: 1.6, // 16-17px with 1.6 line height
+        reading: 1.6, // 16-17px with 1.6 line height for summaries and study
+    },
+    weights: {
+        regular: '400' as const,
+        medium: '500' as const,
+        semibold: '600' as const,
+        bold: '700' as const,
+        black: '900' as const,
     },
 };
 
@@ -224,86 +280,125 @@ export const spacing = {
 };
 
 export const radii = {
-    xs: 4,
-    sm: 8,       // Controls (buttons, inputs)
-    md: 12,      // Cards
-    lg: 14,      // Cards
-    xl: 20,      // Sheets / Modals
-    xxl: 24,
-    full: 9999,
+    xs: 6,
+    sm: 8,
+    controls: 12, // 12 for controls & buttons
+    cards: 18,    // 16-20 for cards
+    sheets: 28,   // 28 for bottom sheets & modals
+    full: 9999,   // Pills
 };
 
-// Two elevation levels using subtle borders instead of heavy drop shadows
 export const lightShadows = {
-    card: {
-        shadowColor: '#1C1B18',
+    subtle: {
+        shadowColor: '#0F1A18',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.05,
+        shadowOpacity: 0.04,
         shadowRadius: 3,
         elevation: 1,
     },
-    modal: {
-        shadowColor: '#1C1B18',
+    card: {
+        shadowColor: '#0F1A18',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.06,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    elevated: {
+        shadowColor: '#0F1A18',
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.12,
+        shadowOpacity: 0.08,
         shadowRadius: 16,
         elevation: 4,
     },
+    modal: {
+        shadowColor: '#0F1A18',
+        shadowOffset: { width: 0, height: 8 },
+        shadowOpacity: 0.14,
+        shadowRadius: 24,
+        elevation: 8,
+    },
     glowAccent: {
-        shadowColor: '#0F6B5C',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.15,
-        shadowRadius: 4,
-        elevation: 2,
+        shadowColor: '#0D9488',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.25,
+        shadowRadius: 6,
+        elevation: 3,
+    },
+    glowCoral: {
+        shadowColor: '#FF6B57',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        elevation: 4,
     },
     floating: {
-        shadowColor: '#1C1B18',
-        shadowOffset: { width: 0, height: 2 },
-        shadowOpacity: 0.1,
-        shadowRadius: 8,
-        elevation: 3,
+        shadowColor: '#0F1A18',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.12,
+        shadowRadius: 10,
+        elevation: 5,
     },
 };
 
 export const darkShadows = {
-    card: {
+    subtle: {
         shadowColor: '#000000',
         shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.25,
+        shadowOpacity: 0.3,
         shadowRadius: 3,
         elevation: 1,
     },
+    card: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.45,
+        shadowRadius: 8,
+        elevation: 2,
+    },
+    elevated: {
+        shadowColor: '#000000',
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.55,
+        shadowRadius: 16,
+        elevation: 5,
+    },
     modal: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 6 },
-        shadowOpacity: 0.45,
-        shadowRadius: 20,
-        elevation: 6,
+        shadowOffset: { width: 0, height: 10 },
+        shadowOpacity: 0.7,
+        shadowRadius: 28,
+        elevation: 10,
     },
     glowAccent: {
-        shadowColor: '#4DB8A3',
-        shadowOffset: { width: 0, height: 1 },
-        shadowOpacity: 0.2,
-        shadowRadius: 5,
-        elevation: 2,
+        shadowColor: '#2DD4BF',
+        shadowOffset: { width: 0, height: 2 },
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        elevation: 3,
+    },
+    glowCoral: {
+        shadowColor: '#FF8A78',
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.35,
+        shadowRadius: 8,
+        elevation: 4,
     },
     floating: {
         shadowColor: '#000000',
-        shadowOffset: { width: 0, height: 3 },
-        shadowOpacity: 0.35,
-        shadowRadius: 10,
-        elevation: 4,
+        shadowOffset: { width: 0, height: 4 },
+        shadowOpacity: 0.6,
+        shadowRadius: 12,
+        elevation: 6,
     },
 };
 
-export const shadows = lightShadows;
-
 export const theme = {
-    colors,
+    colors: lightColors,
+    gradients,
     typography,
     spacing,
     radii,
-    shadows,
+    shadows: lightShadows,
 };
 
 export default theme;

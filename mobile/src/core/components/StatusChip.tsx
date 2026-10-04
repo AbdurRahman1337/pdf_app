@@ -17,7 +17,7 @@ export const StatusChip: React.FC<StatusChipProps> = ({ status = 'READY', size =
     let label = 'Ready';
     let Icon = CheckCircle2;
 
-    if (s.includes('PROCESS') || s.includes('INDEX') || s.includes('PENDING')) {
+    if (s.includes('PROCESS') || s.includes('INDEX') || s.includes('PENDING') || s.includes('READ')) {
         bgColor = colors.warningMuted;
         textColor = colors.warning;
         label = 'Processing';
@@ -43,13 +43,13 @@ export const StatusChip: React.FC<StatusChipProps> = ({ status = 'READY', size =
                 },
             ]}
         >
-            <Icon size={isSmall ? 12 : 14} color={textColor} style={{ marginRight: 4 }} />
+            <Icon size={isSmall ? 11 : 13} color={textColor} strokeWidth={2} style={{ marginRight: 4 }} />
             <Text
                 style={[
                     styles.text,
                     {
                         color: textColor,
-                        fontSize: isSmall ? typography.sizes.xs : typography.sizes.sm,
+                        fontSize: isSmall ? typography.sizes.xs - 1 : typography.sizes.xs,
                     },
                 ]}
             >
@@ -66,8 +66,8 @@ const styles = StyleSheet.create({
         alignSelf: 'flex-start',
     },
     text: {
-        fontWeight: '600',
-        letterSpacing: 0.3,
+        fontWeight: '700',
+        letterSpacing: 0.2,
     },
 });
 

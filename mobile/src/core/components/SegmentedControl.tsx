@@ -1,11 +1,20 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView } from 'react-native';
+import React, { useRef, useEffect } from 'react';
+import {
+    View,
+    Text,
+    TouchableOpacity,
+    StyleSheet,
+    ScrollView,
+    Animated,
+    LayoutChangeEvent,
+} from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
+import { motion, triggerHaptic, getIsReducedMotion } from '../theme/motion';
 
 export interface SegmentOption<T extends string = string> {
     key: T;
     label: string;
-    icon?: React.ComponentType<{ size: number; color: string }>;
+    icon?: React.ComponentType<{ size: number; color: string; strokeWidth?: number }>;
     badgeCount?: number;
 }
 
@@ -13,6 +22,7 @@ interface SegmentedControlProps<T extends string = string> {
     options: SegmentOption<T>[];
     selectedKey: T;
     onSelect: (key: T) => void;
+    activeColor?: string;
     style?: any;
     scrollable?: boolean;
 }
@@ -21,12 +31,21 @@ export function SegmentedControl<T extends string = string>({
     options,
     selectedKey,
     onSelect,
+    activeColor,
     style,
     scrollable,
 }: SegmentedControlProps<T>) {
     const { colors, typography, radii, shadows } = useTheme();
+    const effectiveActiveColor = activeColor || colors.primary;
 
-    const isScrollable = scrollable !== undefined ? scrollable : options.length > 2;
+    const isScrollable = scrollable !== undefined ? scrollable : options.length > 3;
+
+    const handleSelect = (key: T) => {
+        if (key !== selectedKey) {
+            triggerHaptic('selection');
+            onSelect(key);
+        }
+    };
 
     const renderOption = (opt: SegmentOption<T>, isScroll: boolean) => {
         const isSelected = opt.key === selectedKey;
@@ -37,42 +56,45 @@ export function SegmentedControl<T extends string = string>({
                 key={opt.key}
                 style={[
                     isScroll ? styles.scrollSegment : styles.segment,
-                    { borderRadius: radii.sm },
+                    { borderRadius: radii.controls },
                     isSelected && {
-                        backgroundColor: colors.accent,
+                        backgroundColor: effectiveActiveColor,
                         ...shadows.glowAccent,
                     },
                 ]}
-                onPress={() => onSelect(opt.key)}
-                activeOpacity={0.7}
+                onPress={() => handleSelect(opt.key)}
+                activeOpacity={0.8}
+                accessibilityRole="tab"
+                accessibilityState={{ selected: isSelected }}
             >
                 {IconComponent && (
                     <IconComponent
-                        size={14}
+                        size={15}
                         color={isSelected ? colors.textInverse : colors.textMuted}
+                        strokeWidth={isSelected ? 2 : 1.75}
                     />
                 )}
                 <Text
                     style={[
                         styles.label,
                         {
-                            fontSize: isScroll ? (typography.sizes.xs + 1) : typography.sizes.sm,
+                            fontSize: isScroll ? typography.sizes.xs + 1 : typography.sizes.sm,
                             color: isSelected ? colors.textInverse : colors.textMuted,
+                            fontWeight: isSelected ? '700' : '500',
                             marginLeft: IconComponent ? 6 : 0,
                         },
                     ]}
                     numberOfLines={1}
-                    ellipsizeMode="tail"
                 >
                     {opt.label}
                 </Text>
-                {opt.badgeCount !== undefined && (
+                {opt.badgeCount !== undefined && opt.badgeCount > 0 && (
                     <View
                         style={[
                             styles.badge,
                             {
                                 backgroundColor: isSelected
-                                    ? 'rgba(0, 0, 0, 0.2)'
+                                    ? 'rgba(0, 0, 0, 0.25)'
                                     : colors.surfaceHover,
                             },
                         ]}
@@ -81,7 +103,7 @@ export function SegmentedControl<T extends string = string>({
                             style={[
                                 styles.badgeText,
                                 {
-                                    fontSize: typography.sizes.xs,
+                                    fontSize: typography.sizes.xs - 1,
                                     color: isSelected ? colors.textInverse : colors.textMuted,
                                 },
                             ]}
@@ -100,9 +122,9 @@ export function SegmentedControl<T extends string = string>({
                 style={[
                     styles.container,
                     {
-                        backgroundColor: colors.surfaceSubtle,
+                        backgroundColor: colors.surfaceRaised,
                         borderColor: colors.border,
-                        borderRadius: radii.md,
+                        borderRadius: radii.cards,
                     },
                     style,
                 ]}
@@ -123,9 +145,9 @@ export function SegmentedControl<T extends string = string>({
             style={[
                 styles.container,
                 {
-                    backgroundColor: colors.surfaceSubtle,
+                    backgroundColor: colors.surfaceRaised,
                     borderColor: colors.border,
-                    borderRadius: radii.md,
+                    borderRadius: radii.cards,
                 },
                 style,
             ]}
@@ -148,6 +170,7 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         paddingVertical: 9,
         paddingHorizontal: 8,
+        minHeight: 40,
     },
     scrollContent: {
         flexDirection: 'row',
@@ -160,13 +183,14 @@ const styles = StyleSheet.create({
         paddingVertical: 8,
         paddingHorizontal: 14,
         marginRight: 4,
+        minHeight: 38,
     },
     label: {
-        fontWeight: '600',
+        letterSpacing: 0.1,
     },
     badge: {
         paddingHorizontal: 6,
-        paddingVertical: 1,
+        paddingVertical: 2,
         borderRadius: 9999,
         marginLeft: 6,
     },

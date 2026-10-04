@@ -1,12 +1,13 @@
 import React, { useEffect, useRef } from 'react';
-import { View, Animated, StyleSheet } from 'react-native';
+import { View, Animated, StyleSheet, StyleProp, ViewStyle } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
+import { motion, getIsReducedMotion } from '../theme/motion';
 
 interface SkeletonProps {
     width?: number | string;
     height?: number;
     borderRadius?: number;
-    style?: any;
+    style?: StyleProp<ViewStyle>;
 }
 
 export const Skeleton: React.FC<SkeletonProps> = ({
@@ -16,26 +17,33 @@ export const Skeleton: React.FC<SkeletonProps> = ({
     style,
 }) => {
     const { colors, radii } = useTheme();
-    const opacity = useRef(new Animated.Value(0.3)).current;
+    const shimmerAnim = useRef(new Animated.Value(0.3)).current;
 
     useEffect(() => {
-        const animation = Animated.loop(
+        if (getIsReducedMotion()) {
+            shimmerAnim.setValue(0.5);
+            return;
+        }
+
+        const anim = Animated.loop(
             Animated.sequence([
-                Animated.timing(opacity, {
-                    toValue: 0.7,
-                    duration: 800,
+                Animated.timing(shimmerAnim, {
+                    toValue: 0.85,
+                    duration: motion.durations.shimmer / 2,
+                    easing: motion.easings.easeInOut,
                     useNativeDriver: true,
                 }),
-                Animated.timing(opacity, {
+                Animated.timing(shimmerAnim, {
                     toValue: 0.3,
-                    duration: 800,
+                    duration: motion.durations.shimmer / 2,
+                    easing: motion.easings.easeInOut,
                     useNativeDriver: true,
                 }),
             ])
         );
-        animation.start();
-        return () => animation.stop();
-    }, [opacity]);
+        anim.start();
+        return () => anim.stop();
+    }, [shimmerAnim]);
 
     return (
         <Animated.View
@@ -44,8 +52,8 @@ export const Skeleton: React.FC<SkeletonProps> = ({
                     backgroundColor: colors.surfaceHover,
                     width: width as any,
                     height,
-                    borderRadius: borderRadius ?? radii.sm,
-                    opacity,
+                    borderRadius: borderRadius ?? radii.controls,
+                    opacity: shimmerAnim,
                 },
                 style,
             ]}
@@ -53,8 +61,8 @@ export const Skeleton: React.FC<SkeletonProps> = ({
     );
 };
 
-export const CardSkeleton: React.FC<{ style?: any }> = ({ style }) => {
-    const { colors, radii, spacing } = useTheme();
+export const CardSkeleton: React.FC<{ style?: StyleProp<ViewStyle> }> = ({ style }) => {
+    const { colors, radii, spacing, shadows } = useTheme();
 
     return (
         <View
@@ -63,27 +71,32 @@ export const CardSkeleton: React.FC<{ style?: any }> = ({ style }) => {
                 {
                     backgroundColor: colors.surface,
                     borderColor: colors.border,
-                    borderRadius: radii.lg,
+                    borderRadius: radii.cards,
                     padding: spacing.md,
                     marginBottom: spacing.sm,
+                    ...shadows.card,
                 },
                 style,
             ]}
         >
             <View style={styles.cardHeader}>
-                <Skeleton width={44} height={44} borderRadius={radii.md} />
-                <View style={{ flex: 1, marginLeft: 12 }}>
-                    <Skeleton width="70%" height={16} borderRadius={radii.xs} />
-                    <Skeleton width="40%" height={12} borderRadius={radii.xs} style={{ marginTop: 6 }} />
+                <Skeleton width={48} height={48} borderRadius={radii.controls} />
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                    <Skeleton width="65%" height={16} borderRadius={radii.xs} />
+                    <Skeleton width="40%" height={12} borderRadius={radii.xs} style={{ marginTop: 8 }} />
                 </View>
             </View>
-            <Skeleton width="100%" height={12} borderRadius={radii.xs} style={{ marginTop: 12 }} />
-            <Skeleton width="90%" height={12} borderRadius={radii.xs} style={{ marginTop: 6 }} />
+            <Skeleton width="100%" height={12} borderRadius={radii.xs} style={{ marginTop: 14 }} />
+            <Skeleton width="85%" height={12} borderRadius={radii.xs} style={{ marginTop: 8 }} />
+            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 14 }}>
+                <Skeleton width="30%" height={10} borderRadius={radii.xs} />
+                <Skeleton width={28} height={28} borderRadius={14} />
+            </View>
         </View>
     );
 };
 
-export const ParagraphSkeleton: React.FC<{ lines?: number; style?: any }> = ({
+export const ParagraphSkeleton: React.FC<{ lines?: number; style?: StyleProp<ViewStyle> }> = ({
     lines = 4,
     style,
 }) => {
@@ -94,10 +107,10 @@ export const ParagraphSkeleton: React.FC<{ lines?: number; style?: any }> = ({
             {Array.from({ length: lines }).map((_, i) => (
                 <Skeleton
                     key={i}
-                    width={i === lines - 1 ? '65%' : '100%'}
-                    height={14}
+                    width={i === lines - 1 ? '60%' : i % 2 === 0 ? '100%' : '92%'}
+                    height={15}
                     borderRadius={radii.xs}
-                    style={{ marginBottom: 10 }}
+                    style={{ marginBottom: 12 }}
                 />
             ))}
         </View>

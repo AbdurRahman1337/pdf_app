@@ -2,7 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     View,
     Text,
-    TouchableOpacity,
     Modal,
     StyleSheet,
     Animated,
@@ -28,18 +27,19 @@ import {
     Check,
     Palette,
     ShieldCheck,
-    Layers,
-    Sliders,
 } from 'lucide-react-native';
 import { useTheme, ThemeMode } from '../theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing } from '../theme/tokens';
+import { motion, triggerHaptic } from '../theme/motion';
+import { AnimatedPressable } from './AnimatedPressable';
 import authService from '../auth/authService';
 
-const BUTTON_SIZE = 54;
+const BUTTON_SIZE = 50;
 const STORAGE_POS_X = '@pdf_app_floating_pos_x';
 const STORAGE_POS_Y = '@pdf_app_floating_pos_y';
 
 export const FloatingSettings: React.FC = () => {
-    const { themeMode, setThemeMode, isDark, colors, shadows, typography, radii, spacing } = useTheme();
+    const { themeMode, setThemeMode, isDark, colors, shadows } = useTheme();
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
     const [modalVisible, setModalVisible] = useState(false);
@@ -48,25 +48,23 @@ export const FloatingSettings: React.FC = () => {
     // Safe bounds
     const minX = 12;
     const maxX = Math.max(minX, screenWidth - BUTTON_SIZE - 12);
-    const minY = 48; // Below status bar
+    const minY = 48;
     const maxY = Math.max(minY, screenHeight - BUTTON_SIZE - 36);
 
-    const defaultX = screenWidth - BUTTON_SIZE - 20;
-    const defaultY = screenHeight - BUTTON_SIZE - 100;
+    const defaultX = screenWidth - BUTTON_SIZE - 18;
+    const defaultY = screenHeight - BUTTON_SIZE - 95;
 
     // Animated pan position
     const pan = useRef(new Animated.ValueXY({ x: defaultX, y: defaultY })).current;
     const lastPos = useRef({ x: defaultX, y: defaultY });
     const scaleAnim = useRef(new Animated.Value(1)).current;
-
-    // Slow continuous circulating rotation animation
     const spinAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
         const spinAnimation = Animated.loop(
             Animated.timing(spinAnim, {
                 toValue: 1,
-                duration: 10000, // 10s per full 360 rotation for graceful slow motion
+                duration: 12000,
                 easing: Easing.linear,
                 useNativeDriver: true,
             })
@@ -80,7 +78,6 @@ export const FloatingSettings: React.FC = () => {
         outputRange: ['0deg', '360deg'],
     });
 
-    // Listen to user auth state
     useEffect(() => {
         const unsubscribe = authService.onAuthStateChanged((u) => {
             setCurrentUser(u);
@@ -88,7 +85,6 @@ export const FloatingSettings: React.FC = () => {
         return unsubscribe;
     }, []);
 
-    // Listen to keyboard state
     const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
     useEffect(() => {
         const showSub = Keyboard.addListener(
@@ -105,7 +101,6 @@ export const FloatingSettings: React.FC = () => {
         };
     }, []);
 
-    // Load saved position
     useEffect(() => {
         const loadPosition = async () => {
             try {
@@ -131,7 +126,6 @@ export const FloatingSettings: React.FC = () => {
         loadPosition();
     }, [screenWidth, screenHeight]);
 
-    // Save position helper
     const savePosition = async (x: number, y: number) => {
         try {
             await AsyncStorage.setItem(STORAGE_POS_X, x.toString());
@@ -141,7 +135,6 @@ export const FloatingSettings: React.FC = () => {
         }
     };
 
-    // PanResponder for dragging anywhere on the screen
     const dragStartTime = useRef<number>(0);
     const panResponder = useRef(
         PanResponder.create({
@@ -152,7 +145,7 @@ export const FloatingSettings: React.FC = () => {
             onPanResponderGrant: () => {
                 dragStartTime.current = Date.now();
                 Animated.spring(scaleAnim, {
-                    toValue: 1.15,
+                    toValue: 1.12,
                     useNativeDriver: false,
                 }).start();
             },
@@ -171,13 +164,12 @@ export const FloatingSettings: React.FC = () => {
                 const dragDuration = Date.now() - dragStartTime.current;
                 const dragDistance = Math.hypot(gestureState.dx, gestureState.dy);
 
-                // Tap detection: minimal movement and short tap
                 if (dragDistance < 7 && dragDuration < 300) {
+                    triggerHaptic('selection');
                     setModalVisible(true);
                     return;
                 }
 
-                // Dragged: clamp and finalize position
                 const finalX = Math.min(Math.max(lastPos.current.x + gestureState.dx, minX), maxX);
                 const finalY = Math.min(Math.max(lastPos.current.y + gestureState.dy, minY), maxY);
 
@@ -188,8 +180,8 @@ export const FloatingSettings: React.FC = () => {
         })
     ).current;
 
-    // Reset button position
     const resetPosition = () => {
+        triggerHaptic('selection');
         Animated.spring(pan, {
             toValue: { x: defaultX, y: defaultY },
             friction: 6,
@@ -217,16 +209,16 @@ export const FloatingSettings: React.FC = () => {
 
     const themeOptions: { mode: ThemeMode; label: string; sub: string; icon: any }[] = [
         {
-            mode: 'dark',
-            label: 'Dark Mode',
-            sub: 'Deep obsidian & sky blue glow',
-            icon: Moon,
-        },
-        {
             mode: 'light',
             label: 'Light Mode',
-            sub: 'Crisp daylight & high contrast',
+            sub: 'Crisp paper tones & high contrast',
             icon: Sun,
+        },
+        {
+            mode: 'dark',
+            label: 'Dark Mode',
+            sub: 'Deep obsidian & soft luminous teal',
+            icon: Moon,
         },
         {
             mode: 'system',
@@ -238,7 +230,6 @@ export const FloatingSettings: React.FC = () => {
 
     return (
         <>
-            {/* Movable Floating Icon */}
             {!isKeyboardVisible && (
                 <View style={styles.floatingLayer} pointerEvents="box-none">
                     <Animated.View
@@ -264,14 +255,12 @@ export const FloatingSettings: React.FC = () => {
                                 },
                             ]}
                         >
-                            {/* Glow indicator with circulating slow-motion Settings gear */}
-                            <View style={[styles.innerGlow, { backgroundColor: colors.accentMuted }]}>
+                            <View style={[styles.innerGlow, { backgroundColor: colors.primaryMuted }]}>
                                 <Animated.View style={{ transform: [{ rotate: spinInterpolate }] }}>
-                                    <Settings size={22} color={colors.accent} />
+                                    <Settings size={20} color={colors.primary} strokeWidth={2} />
                                 </Animated.View>
                             </View>
 
-                            {/* Mode Indicator Badge */}
                             <View
                                 style={[
                                     styles.modeBadge,
@@ -282,11 +271,11 @@ export const FloatingSettings: React.FC = () => {
                                 ]}
                             >
                                 {themeMode === 'light' ? (
-                                    <Sun size={11} color={colors.warning} />
+                                    <Sun size={10} color={colors.warning} />
                                 ) : themeMode === 'dark' ? (
-                                    <Moon size={11} color={colors.indigo} />
+                                    <Moon size={10} color={colors.primary} />
                                 ) : (
-                                    <Sparkles size={11} color={colors.teal} />
+                                    <Sparkles size={10} color={colors.primary} />
                                 )}
                             </View>
                         </View>
@@ -294,7 +283,6 @@ export const FloatingSettings: React.FC = () => {
                 </View>
             )}
 
-            {/* Settings & Theme Selector Modal */}
             <Modal
                 visible={modalVisible}
                 transparent
@@ -306,8 +294,8 @@ export const FloatingSettings: React.FC = () => {
                         style={[
                             styles.modalCard,
                             {
-                                backgroundColor: colors.surfaceRaised,
-                                borderColor: colors.borderLight,
+                                backgroundColor: colors.surface,
+                                borderColor: colors.border,
                                 ...shadows.modal,
                             },
                         ]}
@@ -318,33 +306,32 @@ export const FloatingSettings: React.FC = () => {
                                 <View
                                     style={[
                                         styles.modalIconBg,
-                                        { backgroundColor: colors.accentMuted, borderColor: colors.accentBorder },
+                                        { backgroundColor: colors.primaryMuted },
                                     ]}
                                 >
-                                    <Palette size={20} color={colors.accent} />
+                                    <Palette size={18} color={colors.primary} strokeWidth={2} />
                                 </View>
                                 <View style={{ marginLeft: 10 }}>
                                     <Text style={[styles.modalTitle, { color: colors.text }]}>
-                                        Appearance & Settings
+                                        Appearance & Controls
                                     </Text>
                                     <Text style={[styles.modalSub, { color: colors.textMuted }]}>
-                                        Customize theme & controls
+                                        Theme and floating dock settings
                                     </Text>
                                 </View>
                             </View>
-                            <TouchableOpacity
+                            <AnimatedPressable
                                 onPress={() => setModalVisible(false)}
-                                style={[styles.closeBtn, { backgroundColor: colors.surfaceSubtle }]}
-                                activeOpacity={0.7}
+                                style={[styles.closeBtn, { backgroundColor: colors.surfaceRaised }]}
                             >
-                                <X size={18} color={colors.textMuted} />
-                            </TouchableOpacity>
+                                <X size={18} color={colors.textMuted} strokeWidth={2} />
+                            </AnimatedPressable>
                         </View>
 
                         <ScrollView style={styles.modalBody} showsVerticalScrollIndicator={false}>
                             {/* Section: Theme Select */}
                             <Text style={[styles.sectionTitle, { color: colors.textSubtle }]}>
-                                Select Theme
+                                Color Theme
                             </Text>
 
                             <View style={styles.themeOptionsGrid}>
@@ -353,23 +340,23 @@ export const FloatingSettings: React.FC = () => {
                                     const Icon = opt.icon;
 
                                     return (
-                                        <TouchableOpacity
+                                        <AnimatedPressable
                                             key={opt.mode}
                                             style={[
                                                 styles.themeCard,
                                                 {
-                                                    backgroundColor: colors.surface,
+                                                    backgroundColor: isSelected
+                                                        ? colors.primaryMuted
+                                                        : colors.surfaceRaised,
                                                     borderColor: isSelected
-                                                        ? colors.accent
+                                                        ? colors.primary
                                                         : colors.border,
                                                 },
-                                                isSelected && {
-                                                    backgroundColor: colors.accentMuted,
-                                                    borderWidth: 2,
-                                                },
                                             ]}
-                                            onPress={() => setThemeMode(opt.mode)}
-                                            activeOpacity={0.8}
+                                            onPress={() => {
+                                                triggerHaptic('selection');
+                                                setThemeMode(opt.mode);
+                                            }}
                                         >
                                             <View style={styles.themeCardLeft}>
                                                 <View
@@ -377,14 +364,15 @@ export const FloatingSettings: React.FC = () => {
                                                         styles.themeIconWrapper,
                                                         {
                                                             backgroundColor: isSelected
-                                                                ? colors.accent
-                                                                : colors.surfaceSubtle,
+                                                                ? colors.primary
+                                                                : colors.surface,
                                                         },
                                                     ]}
                                                 >
                                                     <Icon
-                                                        size={18}
+                                                        size={16}
                                                         color={isSelected ? colors.textInverse : colors.textMuted}
+                                                        strokeWidth={2}
                                                     />
                                                 </View>
                                                 <View style={{ marginLeft: 12, flex: 1 }}>
@@ -392,7 +380,7 @@ export const FloatingSettings: React.FC = () => {
                                                         style={[
                                                             styles.themeLabel,
                                                             { color: colors.text },
-                                                            isSelected && { fontWeight: '700', color: colors.accent },
+                                                            isSelected && { fontWeight: '700', color: colors.primary },
                                                         ]}
                                                     >
                                                         {opt.label}
@@ -407,49 +395,48 @@ export const FloatingSettings: React.FC = () => {
                                                 <View
                                                     style={[
                                                         styles.selectedBadge,
-                                                        { backgroundColor: colors.accent },
+                                                        { backgroundColor: colors.primary },
                                                     ]}
                                                 >
-                                                    <Check size={14} color={colors.textInverse} />
+                                                    <Check size={13} color={colors.textInverse} strokeWidth={2.5} />
                                                 </View>
                                             )}
-                                        </TouchableOpacity>
+                                        </AnimatedPressable>
                                     );
                                 })}
                             </View>
 
                             {/* Section: Dynamic Movable Icon Helpers */}
                             <Text style={[styles.sectionTitle, { color: colors.textSubtle, marginTop: spacing.md }]}>
-                                Moveable Floating Icon
+                                Moveable Settings Bubble
                             </Text>
                             <View
                                 style={[
                                     styles.floatingInfoBox,
-                                    { backgroundColor: colors.surfaceSubtle, borderColor: colors.border },
+                                    { backgroundColor: colors.surfaceRaised, borderColor: colors.border },
                                 ]}
                             >
                                 <View style={styles.floatingInfoRow}>
-                                    <Move size={16} color={colors.accent} style={{ marginRight: 8 }} />
+                                    <Move size={15} color={colors.primary} strokeWidth={2} style={{ marginRight: 8 }} />
                                     <Text style={[styles.floatingInfoText, { color: colors.textSecondary }]}>
-                                        You can drag and move the floating settings button to any position on any screen.
+                                        You can drag and reposition this floating button anywhere on screen.
                                     </Text>
                                 </View>
-                                <TouchableOpacity
+                                <AnimatedPressable
                                     style={[
                                         styles.resetPosBtn,
                                         { borderColor: colors.border, backgroundColor: colors.surface },
                                     ]}
                                     onPress={resetPosition}
-                                    activeOpacity={0.7}
                                 >
-                                    <RotateCcw size={14} color={colors.textMuted} style={{ marginRight: 6 }} />
+                                    <RotateCcw size={13} color={colors.textMuted} strokeWidth={2} style={{ marginRight: 6 }} />
                                     <Text style={[styles.resetPosText, { color: colors.textSecondary }]}>
-                                        Reset Position to Bottom-Right
+                                        Reset to Bottom-Right
                                     </Text>
-                                </TouchableOpacity>
+                                </AnimatedPressable>
                             </View>
 
-                            {/* Section: Session / Account Details */}
+                            {/* Section: Account */}
                             {currentUser && (
                                 <>
                                     <Text
@@ -458,16 +445,16 @@ export const FloatingSettings: React.FC = () => {
                                             { color: colors.textSubtle, marginTop: spacing.md },
                                         ]}
                                     >
-                                        Account
+                                        Active Account
                                     </Text>
                                     <View
                                         style={[
                                             styles.accountBox,
-                                            { backgroundColor: colors.surfaceSubtle, borderColor: colors.border },
+                                            { backgroundColor: colors.surfaceRaised, borderColor: colors.border },
                                         ]}
                                     >
                                         <View style={styles.accountInfo}>
-                                            <ShieldCheck size={18} color={colors.teal} style={{ marginRight: 8 }} />
+                                            <ShieldCheck size={18} color={colors.primary} strokeWidth={2} style={{ marginRight: 8 }} />
                                             <Text
                                                 style={[styles.accountEmail, { color: colors.text }]}
                                                 numberOfLines={1}
@@ -475,39 +462,29 @@ export const FloatingSettings: React.FC = () => {
                                                 {currentUser.email || 'Guest Session'}
                                             </Text>
                                         </View>
-                                        <TouchableOpacity
+                                        <AnimatedPressable
                                             style={[styles.signOutBtn, { backgroundColor: colors.dangerMuted }]}
                                             onPress={handleSignOut}
-                                            activeOpacity={0.8}
                                         >
-                                            <LogOut size={14} color={colors.danger} style={{ marginRight: 6 }} />
+                                            <LogOut size={13} color={colors.danger} strokeWidth={2} style={{ marginRight: 5 }} />
                                             <Text style={[styles.signOutText, { color: colors.danger }]}>
                                                 Sign Out
                                             </Text>
-                                        </TouchableOpacity>
+                                        </AnimatedPressable>
                                     </View>
                                 </>
                             )}
-
-                            {/* Footer App Info */}
-                            <View style={styles.footerNote}>
-                                <Text style={[styles.footerText, { color: colors.textSubtle }]}>
-                                    PDF AI Study Hub • v1.0.0
-                                </Text>
-                            </View>
                         </ScrollView>
 
-                        {/* Modal Action Button */}
-                        <TouchableOpacity
+                        <AnimatedPressable
                             style={[
                                 styles.doneBtn,
-                                { backgroundColor: colors.accent, ...shadows.glowAccent },
+                                { backgroundColor: colors.primary, ...shadows.glowAccent },
                             ]}
                             onPress={() => setModalVisible(false)}
-                            activeOpacity={0.8}
                         >
                             <Text style={[styles.doneBtnText, { color: colors.textInverse }]}>Done</Text>
-                        </TouchableOpacity>
+                        </AnimatedPressable>
                     </View>
                 </View>
             </Modal>
@@ -538,24 +515,24 @@ const styles = StyleSheet.create({
         justifyContent: 'center',
         alignItems: 'center',
         shadowOffset: { width: 0, height: 4 },
-        shadowOpacity: 0.35,
+        shadowOpacity: 0.3,
         shadowRadius: 8,
         elevation: 8,
     },
     innerGlow: {
-        width: 38,
-        height: 38,
-        borderRadius: 19,
+        width: 36,
+        height: 36,
+        borderRadius: 18,
         justifyContent: 'center',
         alignItems: 'center',
     },
     modeBadge: {
         position: 'absolute',
-        top: -3,
-        right: -3,
-        width: 20,
-        height: 20,
-        borderRadius: 10,
+        top: -2,
+        right: -2,
+        width: 18,
+        height: 18,
+        borderRadius: 9,
         borderWidth: 1.5,
         justifyContent: 'center',
         alignItems: 'center',
@@ -568,11 +545,11 @@ const styles = StyleSheet.create({
     },
     modalCard: {
         width: '100%',
-        maxWidth: 420,
+        maxWidth: 400,
         maxHeight: '85%',
-        borderRadius: 24,
+        borderRadius: radii.sheets,
         borderWidth: 1,
-        padding: 20,
+        padding: 22,
     },
     modalHeader: {
         flexDirection: 'row',
@@ -588,25 +565,24 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     modalIconBg: {
-        width: 40,
-        height: 40,
-        borderRadius: 12,
-        borderWidth: 1,
+        width: 38,
+        height: 38,
+        borderRadius: radii.controls,
         justifyContent: 'center',
         alignItems: 'center',
     },
     modalTitle: {
-        fontSize: 17,
-        fontWeight: '700',
+        fontSize: typography.sizes.md,
+        fontWeight: '800',
     },
     modalSub: {
-        fontSize: 12,
+        fontSize: typography.sizes.xs,
         marginTop: 2,
     },
     closeBtn: {
-        width: 34,
-        height: 34,
-        borderRadius: 17,
+        width: 32,
+        height: 32,
+        borderRadius: 16,
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 8,
@@ -615,8 +591,8 @@ const styles = StyleSheet.create({
         marginVertical: 4,
     },
     sectionTitle: {
-        fontSize: 11,
-        fontWeight: '700',
+        fontSize: 10.5,
+        fontWeight: '800',
         textTransform: 'uppercase',
         letterSpacing: 0.8,
         marginBottom: 8,
@@ -631,8 +607,8 @@ const styles = StyleSheet.create({
         justifyContent: 'space-between',
         paddingVertical: 12,
         paddingHorizontal: 14,
-        borderRadius: 14,
-        borderWidth: 1,
+        borderRadius: radii.cards,
+        borderWidth: 1.5,
     },
     themeCardLeft: {
         flexDirection: 'row',
@@ -640,31 +616,31 @@ const styles = StyleSheet.create({
         flex: 1,
     },
     themeIconWrapper: {
-        width: 36,
-        height: 36,
-        borderRadius: 10,
+        width: 34,
+        height: 34,
+        borderRadius: radii.controls,
         justifyContent: 'center',
         alignItems: 'center',
     },
     themeLabel: {
-        fontSize: 14,
+        fontSize: typography.sizes.sm,
         fontWeight: '600',
     },
     themeSub: {
-        fontSize: 11,
+        fontSize: typography.sizes.xs - 1,
         marginTop: 2,
     },
     selectedBadge: {
-        width: 24,
-        height: 24,
-        borderRadius: 12,
+        width: 22,
+        height: 22,
+        borderRadius: 11,
         justifyContent: 'center',
         alignItems: 'center',
         marginLeft: 8,
     },
     floatingInfoBox: {
         borderWidth: 1,
-        borderRadius: 14,
+        borderRadius: radii.cards,
         padding: 12,
     },
     floatingInfoRow: {
@@ -673,8 +649,8 @@ const styles = StyleSheet.create({
         marginBottom: 10,
     },
     floatingInfoText: {
-        fontSize: 12,
-        lineHeight: 17,
+        fontSize: typography.sizes.xs,
+        lineHeight: 18,
         flex: 1,
     },
     resetPosBtn: {
@@ -682,17 +658,17 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         justifyContent: 'center',
         borderWidth: 1,
-        borderRadius: 8,
+        borderRadius: radii.controls,
         paddingVertical: 8,
         paddingHorizontal: 12,
     },
     resetPosText: {
-        fontSize: 12,
-        fontWeight: '600',
+        fontSize: typography.sizes.xs,
+        fontWeight: '700',
     },
     accountBox: {
         borderWidth: 1,
-        borderRadius: 14,
+        borderRadius: radii.cards,
         padding: 12,
         flexDirection: 'row',
         alignItems: 'center',
@@ -705,8 +681,8 @@ const styles = StyleSheet.create({
         marginRight: 8,
     },
     accountEmail: {
-        fontSize: 13,
-        fontWeight: '600',
+        fontSize: typography.sizes.xs + 1,
+        fontWeight: '700',
         flex: 1,
     },
     signOutBtn: {
@@ -714,27 +690,20 @@ const styles = StyleSheet.create({
         alignItems: 'center',
         paddingVertical: 6,
         paddingHorizontal: 10,
-        borderRadius: 8,
+        borderRadius: radii.controls,
     },
     signOutText: {
-        fontSize: 12,
+        fontSize: typography.sizes.xs,
         fontWeight: '700',
-    },
-    footerNote: {
-        alignItems: 'center',
-        paddingVertical: 14,
-    },
-    footerText: {
-        fontSize: 11,
     },
     doneBtn: {
         paddingVertical: 13,
-        borderRadius: 12,
+        borderRadius: radii.controls,
         alignItems: 'center',
-        marginTop: 10,
+        marginTop: 12,
     },
     doneBtnText: {
-        fontSize: 14,
+        fontSize: typography.sizes.sm,
         fontWeight: '700',
     },
 });
