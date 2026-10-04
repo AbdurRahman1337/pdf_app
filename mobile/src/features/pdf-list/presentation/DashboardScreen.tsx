@@ -197,6 +197,7 @@ const LibraryScreen = ({ navigation }: any) => {
     const [toastMessage, setToastMessage] = useState<string | null>(null);
 
     // Load initial courses
+    // Load initial courses
     const loadCourses = async () => {
         try {
             // First check local storage
@@ -211,12 +212,32 @@ const LibraryScreen = ({ navigation }: any) => {
             // Sync with backend course list if reachable
             const res = await apiClient.get('/courses/list').catch(() => null);
             if (res && res.data && Array.isArray(res.data) && res.data.length > 0) {
+                const sanitizedBackend: CourseItem[] = res.data.map((c: any) => ({
+                    id: c.id || `course_${Date.now()}`,
+                    title: c.title || c.course_name || c.name || 'Untitled Course',
+                    description: c.description || '',
+                    target_exam_or_degree: c.target_exam_or_degree || '',
+                    created_at: c.created_at || new Date().toISOString(),
+                    overall_progress_percentage: c.overall_progress_percentage || 0,
+                    subjects: Array.isArray(c.subjects)
+                        ? c.subjects.map((s: any) => ({
+                              id: s.id || `sub_${Date.now()}`,
+                              name: s.name || s.subject_name || 'General Subject',
+                              code: s.code || '',
+                              color: s.color || '#0F6B5C',
+                              documents: Array.isArray(s.documents) ? s.documents : [],
+                              mastery_percentage: s.mastery_percentage || 0,
+                              vocab_count: s.vocab_count || 0,
+                          }))
+                        : [],
+                }));
+
                 // Merge backend courses with existing local data
                 setCourses((prev) => {
-                    const merged = [...res.data];
+                    const merged = [...sanitizedBackend];
                     // Keep any custom user-added courses
-                    prev.forEach((p) => {
-                        if (!merged.some((m) => m.id === p.id)) {
+                    (prev || []).forEach((p) => {
+                        if (p && !merged.some((m) => m && m.id === p.id)) {
                             merged.push(p);
                         }
                     });
@@ -251,11 +272,15 @@ const LibraryScreen = ({ navigation }: any) => {
     const filteredCourses = useMemo(() => {
         if (!searchQuery.trim()) return courses;
         const q = searchQuery.toLowerCase();
-        return courses.filter((c) => {
-            const matchTitle = c.title.toLowerCase().includes(q);
-            const matchSubject = c.subjects.some((s) => s.name.toLowerCase().includes(q));
-            const matchDoc = c.subjects.some((s) => s.documents.some((d) => d.filename.toLowerCase().includes(q)));
-            return matchTitle || matchSubject || matchDoc;
+        return (courses || []).filter((c) => {
+            if (!c) return false;
+            const matchTitle = (c.title || '').toLowerCase().includes(q);
+            const matchTarget = (c.target_exam_or_degree || '').toLowerCase().includes(q);
+            const matchSubject = (c.subjects || []).some((s) => (s?.name || '').toLowerCase().includes(q));
+            const matchDoc = (c.subjects || []).some((s) =>
+                (s?.documents || []).some((d) => (d?.filename || '').toLowerCase().includes(q))
+            );
+            return matchTitle || matchTarget || matchSubject || matchDoc;
         });
     }, [courses, searchQuery]);
 
@@ -265,25 +290,25 @@ const LibraryScreen = ({ navigation }: any) => {
             await AsyncStorage.setItem(
                 LAST_STUDY_CONTEXT_KEY,
                 JSON.stringify({
-                    courseId: course.id,
-                    courseTitle: course.title,
-                    subjectId: subject.id,
-                    subjectName: subject.name,
-                    pdfId: doc.id,
-                    docTitle: doc.filename,
+                    courseId: course?.id,
+                    courseTitle: course?.title,
+                    subjectId: subject?.id,
+                    subjectName: subject?.name,
+                    pdfId: doc?.id,
+                    docTitle: doc?.filename,
                 })
             );
         } catch (err) {
             console.warn('Error saving study context:', err);
         }
 
-        navigation.navigate('courses', {
-            courseId: course.id,
-            courseTitle: course.title,
-            subjectId: subject.id,
-            subjectName: subject.name,
-            pdfId: doc.id,
-            docTitle: doc.filename,
+        navigation?.navigate?.('courses', {
+            courseId: course?.id,
+            courseTitle: course?.title,
+            subjectId: subject?.id,
+            subjectName: subject?.name,
+            pdfId: doc?.id,
+            docTitle: doc?.filename,
         });
     };
 
@@ -444,7 +469,7 @@ const LibraryScreen = ({ navigation }: any) => {
             created_at: new Date().toISOString(),
             overall_progress_percentage: 0,
             subjects: builtSubjects,
-            total_documents: builtSubjects.reduce((acc, s) => acc + s.documents.length, 0),
+            total_documents: builtSubjects.reduce((acc, s) => acc + (s?.documents || []).length, 0),
         };
 
         const updatedList = [newCourse, ...courses];
@@ -466,30 +491,32 @@ const LibraryScreen = ({ navigation }: any) => {
 
         if (deleteConfirmTarget.type === 'course') {
             const courseToDelete = deleteConfirmTarget.item as CourseItem;
-            const updated = courses.filter((c) => c.id !== courseToDelete.id);
-            setDeletedItemCache({ courses: [...courses], message: `Deleted course "${courseToDelete.title}"` });
+            if (!courseToDelete) return;
+            const updated = courses.filter((c) => c && c.id !== courseToDelete.id);
+            setDeletedItemCache({ courses: [...courses], message: `Deleted course "${courseToDelete.title || 'Course'}"` });
             saveCourses(updated);
             if (activeCourseNav?.id === courseToDelete.id) {
                 setActiveCourseNav(null);
             }
-            setToastMessage(`Deleted "${courseToDelete.title}"`);
+            setToastMessage(`Deleted "${courseToDelete.title || 'Course'}"`);
         } else if (deleteConfirmTarget.type === 'subject') {
             const subjectToDelete = deleteConfirmTarget.item as { courseId: string; subject: SubjectItem };
+            if (!subjectToDelete || !subjectToDelete.subject) return;
             const updated = courses.map((c) => {
-                if (c.id === subjectToDelete.courseId) {
+                if (c && c.id === subjectToDelete.courseId) {
                     return {
                         ...c,
-                        subjects: c.subjects.filter((s) => s.id !== subjectToDelete.subject.id),
+                        subjects: (c.subjects || []).filter((s) => s && s.id !== subjectToDelete.subject.id),
                     };
                 }
                 return c;
             });
             saveCourses(updated);
             if (activeCourseNav && activeCourseNav.id === subjectToDelete.courseId) {
-                const refreshed = updated.find((c) => c.id === activeCourseNav.id) || null;
+                const refreshed = updated.find((c) => c && c.id === activeCourseNav.id) || null;
                 setActiveCourseNav(refreshed);
             }
-            setToastMessage(`Deleted subject "${subjectToDelete.subject.name}"`);
+            setToastMessage(`Deleted subject "${subjectToDelete.subject.name || 'Subject'}"`);
         }
 
         setDeleteConfirmTarget(null);
@@ -550,7 +577,8 @@ const LibraryScreen = ({ navigation }: any) => {
 
     // Render single course card
     const renderCourseCard = ({ item }: { item: CourseItem }) => {
-        const totalDocs = item.subjects.reduce((sum, s) => sum + s.documents.length, 0);
+        if (!item) return null;
+        const totalDocs = (item.subjects || []).reduce((sum, s) => sum + (s?.documents || []).length, 0);
         const progress = item.overall_progress_percentage || 0;
 
         return (
@@ -591,7 +619,7 @@ const LibraryScreen = ({ navigation }: any) => {
                 <View style={styles.cardFooter}>
                     <View style={styles.statsRow}>
                         <Text style={styles.statsText}>
-                            {item.subjects.length} {item.subjects.length === 1 ? 'subject' : 'subjects'} · {totalDocs} {totalDocs === 1 ? 'PDF' : 'PDFs'}
+                            {(item.subjects || []).length} {(item.subjects || []).length === 1 ? 'subject' : 'subjects'} · {totalDocs} {totalDocs === 1 ? 'PDF' : 'PDFs'}
                         </Text>
                     </View>
                     <ProgressRing percentage={progress} size={32} strokeWidth={3} showLabel={false} />
@@ -602,6 +630,9 @@ const LibraryScreen = ({ navigation }: any) => {
 
     // Render Detailed Subjects Hierarchy for Selected Course
     const renderCourseSubjectDrilldown = (course: CourseItem) => {
+        if (!course) return null;
+        const subjectList = course.subjects || [];
+
         return (
             <ScrollView
                 style={styles.drilldownContainer}
@@ -620,7 +651,7 @@ const LibraryScreen = ({ navigation }: any) => {
                     <View style={{ flex: 1 }}>
                         <Text style={styles.drilldownTitle}>{course.title}</Text>
                         <Text style={styles.drilldownSubtitle}>
-                            {course.subjects.length} subjects · Tap subject to view PDFs
+                            {subjectList.length} subjects · Tap subject to view PDFs
                         </Text>
                     </View>
                     <TouchableOpacity
@@ -636,7 +667,7 @@ const LibraryScreen = ({ navigation }: any) => {
                     </TouchableOpacity>
                 </View>
 
-                {course.subjects.length === 0 ? (
+                {subjectList.length === 0 ? (
                     <EmptyState
                         icon={BookOpen}
                         title="No subjects added yet"
@@ -648,8 +679,9 @@ const LibraryScreen = ({ navigation }: any) => {
                         }}
                     />
                 ) : (
-                    course.subjects.map((subject) => {
+                    subjectList.map((subject) => {
                         const isExpanded = expandedSubjectId === subject.id;
+                        const docList = subject.documents || [];
 
                         return (
                             <View key={subject.id} style={[styles.subjectRowCard, shadows.card]}>
@@ -663,9 +695,21 @@ const LibraryScreen = ({ navigation }: any) => {
                                     <View style={{ flex: 1, paddingLeft: 12 }}>
                                         <Text style={styles.subjectName}>{subject.name}</Text>
                                         <Text style={styles.subjectMeta}>
-                                            {subject.documents.length} {subject.documents.length === 1 ? 'document' : 'documents'}
+                                            {docList.length} {docList.length === 1 ? 'document' : 'documents'}
                                         </Text>
                                     </View>
+                                    <TouchableOpacity
+                                        style={{ padding: 6, marginRight: 6 }}
+                                        onPress={() =>
+                                            setDeleteConfirmTarget({
+                                                type: 'subject',
+                                                item: { courseId: course.id, subject },
+                                            })
+                                        }
+                                        accessibilityLabel={`Delete subject ${subject.name}`}
+                                    >
+                                        <Trash2 size={15} color={colors.textMuted} strokeWidth={1.5} />
+                                    </TouchableOpacity>
                                     {isExpanded ? (
                                         <ChevronDown size={18} color={colors.textMuted} strokeWidth={1.5} />
                                     ) : (
@@ -675,12 +719,12 @@ const LibraryScreen = ({ navigation }: any) => {
 
                                 {isExpanded && (
                                     <View style={styles.subjectDocsContainer}>
-                                        {subject.documents.length === 0 ? (
+                                        {docList.length === 0 ? (
                                             <View style={styles.emptySubjectDocs}>
                                                 <Text style={styles.emptyDocsText}>No PDFs in this subject yet.</Text>
                                             </View>
                                         ) : (
-                                            subject.documents.map((doc) => (
+                                            docList.map((doc) => (
                                                 <TouchableOpacity
                                                     key={doc.id}
                                                     style={styles.docItemRow}

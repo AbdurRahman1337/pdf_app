@@ -12,6 +12,7 @@ import {
     Platform,
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as DocumentPicker from 'expo-document-picker';
 import {
     Award,
     Target,
@@ -34,13 +35,15 @@ import {
     BarChart2,
     SlidersHorizontal,
     Plus,
+    UploadCloud,
+    ChevronDown,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import { useTheme } from '../../../core/theme/ThemeContext';
 import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import EmptyState from '../../../core/components/EmptyState';
 import ConfirmDialog from '../../../core/components/ConfirmDialog';
-import { DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, LAST_STUDY_CONTEXT_KEY } from '../../pdf-list/presentation/DashboardScreen';
+import { DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc, LAST_STUDY_CONTEXT_KEY } from '../../pdf-list/presentation/DashboardScreen';
 
 export interface ExamQuestionItem {
     id: number;
@@ -71,6 +74,7 @@ const AUTOSAVE_STORAGE_KEY = '@pdf_app_active_test_autosave_v3';
 const HISTORY_STORAGE_KEY = '@pdf_app_test_history_v3';
 
 const ExamPrepScreen = ({ route, navigation }: any) => {
+    const routeParams = route?.params || {};
     const { colors, shadows, isDark } = useTheme();
     const styles = useMemo(() => createStyles(colors), [colors]);
 
@@ -81,12 +85,14 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
     const [selectedCourse, setSelectedCourse] = useState<CourseItem>(DEFAULT_INITIAL_COURSE);
     const [selectedSubjectIds, setSelectedSubjectIds] = useState<Record<string, boolean>>({});
+    const [isCoursePickerOpen, setIsCoursePickerOpen] = useState(false);
 
     // Setup Wizard Settings
     const [questionCount, setQuestionCount] = useState<number>(10);
     const [difficulty, setDifficulty] = useState<'Easy' | 'Medium' | 'Hard'>('Medium');
     const [hasTimer, setHasTimer] = useState<boolean>(true);
     const [timerMinutes, setTimerMinutes] = useState<number>(15);
+    const [extraAttachedFiles, setExtraAttachedFiles] = useState<{ name: string; size: number }[]>([]);
 
     // Active Test State
     const [testQuestions, setTestQuestions] = useState<ExamQuestionItem[]>([]);
@@ -112,38 +118,49 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         return () => {
             if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
         };
-    }, []);
+    }, [routeParams]);
 
     const loadDataAndCheckAutosave = async () => {
         try {
             // Load courses
             const coursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
+            let loadedCourses = [DEFAULT_INITIAL_COURSE];
             if (coursesRaw) {
                 const parsed = JSON.parse(coursesRaw);
                 if (Array.isArray(parsed) && parsed.length > 0) {
+                    loadedCourses = parsed;
                     setCourses(parsed);
-                    setSelectedCourse(parsed[0]);
-                    const subMap: Record<string, boolean> = {};
-                    parsed[0].subjects.forEach((s: SubjectItem) => (subMap[s.id] = true));
-                    setSelectedSubjectIds(subMap);
                 }
-            } else {
-                const subMap: Record<string, boolean> = {};
-                DEFAULT_INITIAL_COURSE.subjects.forEach((s) => (subMap[s.id] = true));
-                setSelectedSubjectIds(subMap);
             }
+
+            // Match target course if specified in routeParams or fallback to first
+            let activeCourse = loadedCourses[0];
+            if (routeParams.courseId) {
+                const found = loadedCourses.find((c) => c.id === routeParams.courseId);
+                if (found) activeCourse = found;
+            }
+            setSelectedCourse(activeCourse);
+
+            const subMap: Record<string, boolean> = {};
+            (activeCourse.subjects || []).forEach((s: SubjectItem) => {
+                subMap[s.id] = true;
+            });
+            setSelectedSubjectIds(subMap);
 
             // Load history
             const histRaw = await AsyncStorage.getItem(HISTORY_STORAGE_KEY);
             if (histRaw) {
-                setHistory(JSON.parse(histRaw));
+                const parsedHist = JSON.parse(histRaw);
+                if (Array.isArray(parsedHist)) {
+                    setHistory(parsedHist);
+                }
             }
 
             // Check autosave
             const autoSaveRaw = await AsyncStorage.getItem(AUTOSAVE_STORAGE_KEY);
             if (autoSaveRaw) {
                 const auto = JSON.parse(autoSaveRaw);
-                if (auto && auto.testQuestions && auto.testQuestions.length > 0 && !auto.submitted) {
+                if (auto && Array.isArray(auto.testQuestions) && auto.testQuestions.length > 0 && !auto.submitted) {
                     setTestQuestions(auto.testQuestions);
                     setUserAnswers(auto.userAnswers || {});
                     setFlaggedQuestions(auto.flaggedQuestions || {});
@@ -210,9 +227,30 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         }));
     };
 
+    // Pick Extra PDFs for this test
+    const handlePickExtraPDFs = async () => {
+        try {
+            const result = await DocumentPicker.getDocumentAsync({
+                type: ['application/pdf', 'text/plain'],
+                multiple: true,
+                copyToCacheDirectory: true,
+            });
+
+            if (!result.canceled && result.assets && result.assets.length > 0) {
+                const newFiles = result.assets.map((a) => ({
+                    name: a.name,
+                    size: a.size || 1024000,
+                }));
+                setExtraAttachedFiles((prev) => [...prev, ...newFiles]);
+            }
+        } catch (e) {
+            console.warn('PDF pick error:', e);
+        }
+    };
+
     // Generate and Start Test
     const handleLaunchTest = async () => {
-        const activeSubNames = selectedCourse.subjects
+        const activeSubNames = (selectedCourse?.subjects || [])
             .filter((s) => selectedSubjectIds[s.id])
             .map((s) => s.name);
 
@@ -237,15 +275,15 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
             const res = await apiClient.post('/exam-prep/generate-test', payload).catch(() => null);
 
             let builtQuestions: ExamQuestionItem[] = [];
-            if (res && res.data && res.data.questions && res.data.questions.length > 0) {
+            if (res && res.data && Array.isArray(res.data.questions) && res.data.questions.length > 0) {
                 builtQuestions = res.data.questions.map((q: any, idx: number) => ({
                     id: idx + 1,
                     subject: q.subject || activeSubNames[idx % activeSubNames.length],
                     topic: q.topic || 'Core Concept',
                     question: q.question,
-                    options: q.options,
-                    correct_answer: q.correct_answer,
-                    explanation: q.explanation,
+                    options: Array.isArray(q.options) ? q.options : ['Option A', 'Option B', 'Option C', 'Option D'],
+                    correct_answer: q.correct_answer || q.options?.[0] || 'Option A',
+                    explanation: q.explanation || 'Review course syllabus for full rationale.',
                     difficulty: q.difficulty || 'Medium',
                     page: (idx % 6) + 2,
                 }));
@@ -318,11 +356,12 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
 
         while (pool.length < count) {
             const nextIdx = pool.length + 1;
+            const subLabel = subNames[nextIdx % subNames.length] || 'Science';
             pool.push({
                 id: nextIdx,
-                subject: subNames[nextIdx % subNames.length],
+                subject: subLabel,
                 topic: 'Applied Practice Problem',
-                question: `Conceptual diagnostic question #${nextIdx} regarding ${subNames[nextIdx % subNames.length]} core principles.`,
+                question: `Conceptual diagnostic question #${nextIdx} regarding ${subLabel} core principles.`,
                 options: ['Primary verified relationship', 'Secondary distractor', 'Inverse variable', 'Unrelated coefficient'],
                 correct_answer: 'Primary verified relationship',
                 explanation: 'Directly supported by the official curriculum notes and experimental derivations.',
@@ -380,12 +419,12 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         const record: ExamAttemptRecord = {
             id: `test_${Date.now()}`,
             date: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }),
-            courseTitle: selectedCourse.title,
+            courseTitle: selectedCourse?.title || 'Course Assessment',
             subjects: Object.keys(subStats),
             scorePct,
             totalCorrect: correctCount,
             totalQuestions: testQuestions.length,
-            timeSpentSeconds: hasTimer ? timerMinutes * 60 - timeLeftSeconds : 60,
+            timeSpentSeconds: hasTimer ? Math.max(10, timerMinutes * 60 - timeLeftSeconds) : 60,
             subjectBreakdown: breakdownArray,
             weakTopics: Array.from(new Set(weakList)),
         };
@@ -406,12 +445,13 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
 
     // "Practice these" button: jumps directly to Course Hub targeted quiz
     const handlePracticeWeakTopics = () => {
-        const targetSub = selectedCourse.subjects.find((s) =>
-            activeResult?.weakTopics.some((w) => w.startsWith(s.name))
-        ) || selectedCourse.subjects[0];
+        const weakTopicsList = activeResult?.weakTopics || (history[0]?.weakTopics || []);
+        const targetSub = (selectedCourse?.subjects || []).find((s) =>
+            weakTopicsList.some((w) => w.startsWith(s.name))
+        ) || selectedCourse?.subjects?.[0];
 
         navigation.navigate('courses', {
-            courseId: selectedCourse.id,
+            courseId: selectedCourse?.id,
             subjectId: targetSub?.id,
             autoOpenQuiz: true,
         });
@@ -423,6 +463,14 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         const s = seconds % 60;
         return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
     };
+
+    // Safe recent weak topics
+    const recentWeakTopics = useMemo(() => {
+        if (history.length > 0 && Array.isArray(history[0]?.weakTopics)) {
+            return history[0].weakTopics;
+        }
+        return [];
+    }, [history]);
 
     return (
         <View style={styles.container}>
@@ -461,11 +509,11 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                     </View>
 
                     {/* Recent Weak Areas & Readiness */}
-                    {history.length > 0 && history[0].weakTopics.length > 0 && (
+                    {recentWeakTopics.length > 0 && (
                         <View style={styles.sectionContainer}>
                             <Text style={styles.sectionHeader}>Identified Weak Topics</Text>
                             <View style={[styles.weakTopicsCard, shadows.card]}>
-                                {history[0].weakTopics.slice(0, 3).map((w, idx) => (
+                                {recentWeakTopics.slice(0, 3).map((w, idx) => (
                                     <View key={idx} style={styles.weakTopicRow}>
                                         <AlertTriangle size={15} color={colors.warning} style={{ marginRight: 8 }} />
                                         <Text style={styles.weakTopicText} numberOfLines={1}>
@@ -475,12 +523,7 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                                 ))}
                                 <TouchableOpacity
                                     style={styles.practiceWeakBtn}
-                                    onPress={() => {
-                                        navigation.navigate('courses', {
-                                            courseId: selectedCourse.id,
-                                            autoOpenQuiz: true,
-                                        });
-                                    }}
+                                    onPress={handlePracticeWeakTopics}
                                 >
                                     <Text style={[styles.practiceWeakText, { color: colors.accent }]}>
                                         Practice weak areas in Course Hub
@@ -564,14 +607,26 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                         <Text style={styles.wizardTitle}>Configure Your Test</Text>
                     </View>
 
+                    {/* Pick Course */}
                     <Text style={styles.fieldLabel}>Course</Text>
-                    <View style={[styles.courseSelectBox, shadows.card]}>
-                        <Text style={styles.courseSelectText}>{selectedCourse.title}</Text>
-                    </View>
+                    <TouchableOpacity
+                        style={[styles.courseSelectBox, shadows.card]}
+                        onPress={() => setIsCoursePickerOpen(true)}
+                        activeOpacity={0.7}
+                    >
+                        <View style={{ flex: 1 }}>
+                            <Text style={styles.courseSelectText}>{selectedCourse?.title || 'Select a Course'}</Text>
+                            <Text style={styles.courseSelectSubtext}>
+                                {selectedCourse?.subjects?.length || 0} subjects available
+                            </Text>
+                        </View>
+                        <ChevronDown size={16} color={colors.textMuted} />
+                    </TouchableOpacity>
 
+                    {/* Select Subjects */}
                     <Text style={styles.fieldLabel}>Select Subjects</Text>
                     <View style={styles.subjectsCheckboxList}>
-                        {selectedCourse.subjects.map((sub) => {
+                        {(selectedCourse?.subjects || []).map((sub) => {
                             const isChecked = !!selectedSubjectIds[sub.id];
 
                             return (
@@ -594,13 +649,14 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                                     </View>
                                     <Text style={styles.subjectCheckName}>{sub.name}</Text>
                                     <Text style={styles.subjectDocCount}>
-                                        {sub.documents.length} PDFs
+                                        {(sub.documents || []).length} PDFs
                                     </Text>
                                 </TouchableOpacity>
                             );
                         })}
                     </View>
 
+                    {/* Question Count */}
                     <Text style={styles.fieldLabel}>Question Count</Text>
                     <View style={styles.pillSelectorRow}>
                         {[5, 10, 20, 30].map((cnt) => (
@@ -624,6 +680,31 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                         ))}
                     </View>
 
+                    {/* Difficulty */}
+                    <Text style={styles.fieldLabel}>Difficulty</Text>
+                    <View style={styles.pillSelectorRow}>
+                        {['Easy', 'Medium', 'Hard'].map((diff) => (
+                            <TouchableOpacity
+                                key={diff}
+                                style={[
+                                    styles.selectorPill,
+                                    difficulty === diff && styles.selectorPillActive,
+                                ]}
+                                onPress={() => setDifficulty(diff as any)}
+                            >
+                                <Text
+                                    style={[
+                                        styles.selectorPillText,
+                                        difficulty === diff && { color: colors.accent, fontWeight: '600' },
+                                    ]}
+                                >
+                                    {diff}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+
+                    {/* Timer */}
                     <Text style={styles.fieldLabel}>Timer (Optional)</Text>
                     <View style={styles.pillSelectorRow}>
                         {[
@@ -661,6 +742,19 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                             );
                         })}
                     </View>
+
+                    {/* Add PDFs for this test */}
+                    <Text style={styles.fieldLabel}>Extra Material (Optional)</Text>
+                    <TouchableOpacity
+                        style={styles.addExtraPdfsBtn}
+                        onPress={handlePickExtraPDFs}
+                        activeOpacity={0.7}
+                    >
+                        <UploadCloud size={16} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 6 }} />
+                        <Text style={[styles.addExtraPdfsText, { color: colors.accent }]}>
+                            {extraAttachedFiles.length > 0 ? `Attached ${extraAttachedFiles.length} extra PDFs` : 'Add PDFs for this test'}
+                        </Text>
+                    </TouchableOpacity>
 
                     <TouchableOpacity
                         style={[styles.launchTestSubmitBtn, { backgroundColor: colors.accent }]}
@@ -761,7 +855,7 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
 
                                     {/* Options List */}
                                     <View style={styles.optionsList}>
-                                        {testQuestions[currentQIndex].options.map((opt, oIdx) => {
+                                        {(testQuestions[currentQIndex].options || []).map((opt, oIdx) => {
                                             const currentQ = testQuestions[currentQIndex];
                                             const isSelected = userAnswers[currentQ.id] === opt;
 
@@ -849,7 +943,7 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                     {/* Per-Subject Breakdown Bar */}
                     <Text style={styles.sectionHeader}>Subject Breakdown</Text>
                     <View style={[styles.breakdownCard, shadows.card]}>
-                        {activeResult.subjectBreakdown.map((sb, idx) => {
+                        {(activeResult.subjectBreakdown || []).map((sb, idx) => {
                             const pct = sb.total > 0 ? Math.round((sb.correct / sb.total) * 100) : 0;
                             return (
                                 <View key={idx} style={styles.breakdownRow}>
@@ -874,11 +968,11 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                     </View>
 
                     {/* Weak Topics with "Practice these" button */}
-                    {activeResult.weakTopics.length > 0 && (
+                    {(activeResult.weakTopics || []).length > 0 && (
                         <View style={styles.sectionContainer}>
                             <Text style={styles.sectionHeader}>Identified Weak Topics</Text>
                             <View style={[styles.weakTopicsCard, shadows.card]}>
-                                {activeResult.weakTopics.map((w, idx) => (
+                                {(activeResult.weakTopics || []).map((w, idx) => (
                                     <View key={idx} style={styles.weakTopicRow}>
                                         <AlertTriangle size={15} color={colors.warning} style={{ marginRight: 8 }} />
                                         <Text style={styles.weakTopicText}>{w}</Text>
@@ -921,6 +1015,11 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                                 )}
                                 <Text style={styles.reviewCorrectAnswer}>Correct Answer: {q.correct_answer}</Text>
                                 <Text style={styles.reviewExplanation}>{q.explanation}</Text>
+                                {q.page && (
+                                    <View style={[styles.pageChip, { alignSelf: 'flex-start', marginTop: 8 }]}>
+                                        <Text style={styles.pageChipText}>Source p. {q.page}</Text>
+                                    </View>
+                                )}
                             </View>
                         );
                     })}
@@ -933,6 +1032,48 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
                     </TouchableOpacity>
                 </ScrollView>
             )}
+
+            {/* Course Picker Modal in Setup */}
+            <Modal
+                visible={isCoursePickerOpen}
+                transparent
+                animationType="fade"
+                onRequestClose={() => setIsCoursePickerOpen(false)}
+            >
+                <TouchableOpacity
+                    style={styles.modalOverlay}
+                    activeOpacity={1}
+                    onPress={() => setIsCoursePickerOpen(false)}
+                >
+                    <View style={[styles.paletteModalCard, shadows.modal]}>
+                        <Text style={styles.paletteTitle}>Select Course</Text>
+                        {courses.map((c) => {
+                            const isCurrentCourse = selectedCourse?.id === c.id;
+                            return (
+                                <TouchableOpacity
+                                    key={c.id}
+                                    style={[
+                                        styles.coursePickOption,
+                                        isCurrentCourse && { backgroundColor: colors.accentMuted, borderColor: colors.accent },
+                                    ]}
+                                    onPress={() => {
+                                        setSelectedCourse(c);
+                                        const subMap: Record<string, boolean> = {};
+                                        (c.subjects || []).forEach((s) => (subMap[s.id] = true));
+                                        setSelectedSubjectIds(subMap);
+                                        setIsCoursePickerOpen(false);
+                                    }}
+                                >
+                                    <Text style={styles.coursePickOptionTitle}>{c.title}</Text>
+                                    <Text style={styles.coursePickOptionMeta}>
+                                        {(c.subjects || []).length} subjects
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                </TouchableOpacity>
+            </Modal>
 
             {/* Question Palette Modal */}
             <Modal
@@ -1153,6 +1294,9 @@ const createStyles = (colors: ThemeColors) =>
             marginBottom: 8,
         },
         courseSelectBox: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'space-between',
             backgroundColor: colors.surface,
             borderRadius: radii.sm,
             borderWidth: 1,
@@ -1163,7 +1307,31 @@ const createStyles = (colors: ThemeColors) =>
         courseSelectText: {
             fontSize: typography.sizes.sm,
             color: colors.text,
-            fontWeight: '500',
+            fontWeight: '600',
+        },
+        courseSelectSubtext: {
+            fontSize: typography.sizes.xs,
+            color: colors.textMuted,
+            marginTop: 2,
+        },
+        coursePickOption: {
+            paddingVertical: 12,
+            paddingHorizontal: 14,
+            borderRadius: radii.sm,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.surfaceRaised,
+            marginBottom: 8,
+        },
+        coursePickOptionTitle: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '600',
+            color: colors.text,
+        },
+        coursePickOptionMeta: {
+            fontSize: typography.sizes.xs,
+            color: colors.textMuted,
+            marginTop: 2,
         },
         subjectsCheckboxList: {
             gap: 8,
@@ -1219,6 +1387,22 @@ const createStyles = (colors: ThemeColors) =>
         selectorPillText: {
             fontSize: typography.sizes.xs,
             color: colors.textSecondary,
+        },
+        addExtraPdfsBtn: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            justifyContent: 'center',
+            paddingVertical: 10,
+            borderRadius: radii.sm,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderStyle: 'dashed',
+            backgroundColor: colors.surface,
+            marginBottom: 10,
+        },
+        addExtraPdfsText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '600',
         },
         launchTestSubmitBtn: {
             paddingVertical: 14,
@@ -1463,6 +1647,17 @@ const createStyles = (colors: ThemeColors) =>
             fontSize: typography.sizes.xs,
             color: colors.textMuted,
             lineHeight: 18,
+        },
+        pageChip: {
+            backgroundColor: colors.accentMuted,
+            paddingHorizontal: 8,
+            paddingVertical: 3,
+            borderRadius: radii.xs,
+        },
+        pageChipText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '600',
+            color: colors.accent,
         },
         doneResultsBtn: {
             paddingVertical: 14,
