@@ -1,0 +1,47 @@
+{
+  "expo": {
+    "name": "PDF INSIGHTS",
+    "slug": "pdf-insights",
+    "version": "1.0.0",
+    "sdkVersion": "54.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "dark",
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#020617"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.technext.pdf_app",
+      "icon": "./assets/icon.png"
+    },
+    "android": {
+      "package": "com.technext.pdf_app",
+      "googleServicesFile": "./google-services.json",
+      "softwareKeyboardLayoutMode": "resize",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#020617"
+      }
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth"
+    ],
+    "owner": "abdurrahman1337-2",
+    "extra": {
+      "eas": {
+        "projectId": "caa611df-feee-4be0-bd51-34b7ed6ef308"
+      }
+    }
+  }
+}

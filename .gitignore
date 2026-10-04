@@ -1,0 +1,48 @@
+# Environment & Secret variables
+.env
+.env.*
+!.env.example
+*.env
+
+# Credentials, Service Accounts & OAuth Secrets
+firebase_service_account*.json
+pdf-app-*.json
+*-adminsdk-*.json
+pc-api-key.json
+*client_secret*.json
+google_client_secret*.json
+*.keystore
+*.jks
+
+# Google Services Config (Sensitive API keys)
+google-services.json
+GoogleService-Info.plist
+!mobile/google-services.json
+!admin_panel/google-services.json
+
+# Node & Frontend
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Databases & Vector DB Data (Never commit local binary DB files)
+postgres_data/
+redis_data/
+chroma_data/
+chroma_db/
+backend/chroma_db/
+ollama_data/
+lt_data/
+
+# Storage & Uploads
+storage/uploads/
+storage/
+
+# Python & Test artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.pytest_cache/
