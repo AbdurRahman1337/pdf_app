@@ -1,6 +1,6 @@
 {
   "expo": {
-    "name": "PDF INSIGHTS",
+    "name": "Lecta AI",
     "slug": "pdf-insights",
     "version": "1.0.0",
     "sdkVersion": "54.0.0",
@@ -9,8 +9,8 @@
     "userInterfaceStyle": "dark",
     "splash": {
       "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#020617"
+      "resizeMode": "cover",
+      "backgroundColor": "#142036"
     },
     "assetBundlePatterns": [
       "**/*"

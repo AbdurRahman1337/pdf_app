@@ -12,17 +12,22 @@ import {
     Keyboard,
     Platform,
 } from 'react-native';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, Zap } from 'lucide-react-native';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, ShieldCheck, Zap, Sparkles, UploadCloud } from 'lucide-react-native';
 import authService from '../../../core/auth/authService';
-import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
+import { getBaseUrl } from '../../../core/network/apiClient';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
+import TactileButton from '../../../core/components/TactileButton';
+import TactileCard from '../../../core/components/TactileCard';
 
 const friendlyError = (code?: string): string => {
     switch (code) {
         case 'auth/invalid-email':
             return 'Please enter a valid email address.';
         case 'auth/user-not-found':
+            return 'Incorrect email or password.';
         case 'auth/wrong-password':
+            return 'Incorrect email or password.';
         case 'auth/invalid-credential':
             return 'Incorrect email or password.';
         case 'auth/email-already-in-use':
@@ -30,17 +35,18 @@ const friendlyError = (code?: string): string => {
         case 'auth/weak-password':
             return 'Password must be at least 6 characters.';
         case 'auth/too-many-requests':
-            return 'Too many failed attempts. Please try again later.';
+            return 'Too many attempts. Please try again in a moment.';
         case 'auth/network-request-failed':
-            return 'Network error. Check your server connection.';
+            return 'Network error. Please check your connection.';
         default:
             return 'Authentication failed. Please try again.';
     }
 };
 
 const AuthScreen = ({ navigation }: any) => {
-    const { colors, shadows } = useTheme();
-    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+    const { colors, shadows, isDark } = useTheme();
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState('');
@@ -58,7 +64,7 @@ const AuthScreen = ({ navigation }: any) => {
             () => {
                 setIsKeyboardVisible(true);
                 setTimeout(() => {
-                    scrollRef.current?.scrollTo({ y: 150, animated: true });
+                    scrollRef.current?.scrollTo({ y: 140, animated: true });
                 }, 100);
             }
         );
@@ -73,6 +79,20 @@ const AuthScreen = ({ navigation }: any) => {
             hideSub.remove();
         };
     }, []);
+
+    const handleGoogleDriveOAuth = async () => {
+        setError('');
+        setLoading(true);
+        try {
+            const baseUrl = getBaseUrl();
+            await authService.initiateGoogleDriveOAuth(baseUrl);
+            navigation.replace('Dashboard');
+        } catch (err: any) {
+            setError(err.message || 'Google Drive authorization failed.');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     const handleAuth = async () => {
         setError('');
@@ -124,7 +144,6 @@ const AuthScreen = ({ navigation }: any) => {
         <KeyboardAvoidingView
             style={styles.container}
             behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-            keyboardVerticalOffset={Platform.OS === 'ios' ? 0 : 0}
         >
             <ScrollView
                 ref={scrollRef}
@@ -132,74 +151,61 @@ const AuthScreen = ({ navigation }: any) => {
                     styles.scrollContainer,
                     isKeyboardVisible && {
                         justifyContent: 'flex-start',
-                        paddingTop: spacing.lg,
+                        paddingTop: topGap,
                         paddingBottom: 60,
                     },
                 ]}
                 showsVerticalScrollIndicator={false}
                 keyboardShouldPersistTaps="handled"
-                keyboardDismissMode="on-drag"
             >
                 {/* ── Brand Header ── */}
-                <View
-                    style={[
-                        styles.brandContainer,
-                        isKeyboardVisible && { marginBottom: spacing.sm },
-                    ]}
-                >
-                    <View
-                        style={[
-                            styles.logoBadge,
-                            isKeyboardVisible && { width: 56, height: 56, marginBottom: spacing.xs },
-                        ]}
-                    >
+                <View style={[styles.brandContainer, isKeyboardVisible && { marginBottom: 12 }]}>
+                    <View style={styles.logoBadge}>
                         <Image
-                            source={require('../../../../assets/main.png')}
-                            style={[
-                                styles.logoImage,
-                                isKeyboardVisible && { width: 40, height: 40 },
-                            ]}
+                            source={require('../../../../assets/mainicon.jpeg')}
+                            style={styles.logoImage}
                         />
                     </View>
-                    <Text style={styles.brandTitle}>PDF AI Study Hub</Text>
+                    <Text style={styles.brandTitle}>Lecta AI</Text>
                     {!isKeyboardVisible && (
                         <Text style={styles.brandSubtitle}>
-                            Synthesize documents, extract key vocabulary, and query notes with RAG.
+                            Turn your study materials into interactive flashcards, active recall quizzes, and AI tutoring.
                         </Text>
                     )}
-
-                    <View style={authService.isFirebaseAvailable ? styles.authStatusBadgeFirebase : styles.authStatusBadgeExpo}>
-                        <ShieldCheck
-                            size={13}
-                            color={authService.isFirebaseAvailable ? colors.warning : colors.accent}
-                            style={{ marginRight: 5 }}
-                        />
-                        <Text style={authService.isFirebaseAvailable ? styles.badgeTextFirebase : styles.badgeTextExpo}>
-                            {authService.isFirebaseAvailable
-                                ? 'Firebase Auth Active'
-                                : 'Expo Dev Session (Guest Ready)'}
-                        </Text>
-                    </View>
                 </View>
 
                 {/* ── Form Card ── */}
-                <View style={styles.card}>
+                <TactileCard contentStyle={{ padding: 20 }}>
                     <View style={styles.cardNav}>
                         <TouchableOpacity
-                            style={[styles.cardNavTab, isLogin && styles.cardNavTabActive]}
+                            style={[
+                                styles.cardNavTab,
+                                isLogin && {
+                                    backgroundColor: colors.surface,
+                                    borderBottomWidth: 3,
+                                    borderBottomColor: colors.buttonSecondaryEdge,
+                                },
+                            ]}
                             onPress={() => { setIsLogin(true); setError(''); }}
-                            activeOpacity={0.7}
+                            activeOpacity={0.75}
                         >
-                            <Text style={[styles.cardNavText, isLogin && styles.cardNavTextActive]}>
+                            <Text style={[styles.cardNavText, isLogin && { color: colors.text, fontWeight: '800' }]}>
                                 Sign In
                             </Text>
                         </TouchableOpacity>
                         <TouchableOpacity
-                            style={[styles.cardNavTab, !isLogin && styles.cardNavTabActive]}
+                            style={[
+                                styles.cardNavTab,
+                                !isLogin && {
+                                    backgroundColor: colors.surface,
+                                    borderBottomWidth: 3,
+                                    borderBottomColor: colors.buttonSecondaryEdge,
+                                },
+                            ]}
                             onPress={() => { setIsLogin(false); setError(''); }}
-                            activeOpacity={0.7}
+                            activeOpacity={0.75}
                         >
-                            <Text style={[styles.cardNavText, !isLogin && styles.cardNavTextActive]}>
+                            <Text style={[styles.cardNavText, !isLogin && { color: colors.text, fontWeight: '800' }]}>
                                 Create Account
                             </Text>
                         </TouchableOpacity>
@@ -207,23 +213,22 @@ const AuthScreen = ({ navigation }: any) => {
 
                     {/* Error Banner */}
                     {error ? (
-                        <View style={styles.errorBox}>
-                            <Text style={styles.errorText}>{error}</Text>
+                        <View style={[styles.errorBox, { backgroundColor: colors.dangerMuted, borderColor: colors.dangerBorder }]}>
+                            <Text style={[styles.errorText, { color: colors.danger }]}>{error}</Text>
                         </View>
                     ) : null}
 
                     {/* Inputs */}
                     <View style={styles.inputGroup}>
                         <Text style={styles.inputLabel}>Email Address</Text>
-                        <View style={styles.inputWrapper}>
-                            <Mail size={17} color={colors.textMuted} style={styles.inputIcon} />
+                        <View style={[styles.inputWrapper, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}>
+                            <Mail size={18} color={colors.textMuted} style={styles.inputIcon} />
                             <TextInput
-                                style={styles.input}
+                                style={[styles.input, { color: colors.text }]}
                                 placeholder="student@university.edu"
-                                placeholderTextColor={colors.textSubtle}
+                                placeholderTextColor={colors.textMuted}
                                 value={email}
                                 onChangeText={setEmail}
-                                onFocus={() => scrollRef.current?.scrollTo({ y: 120, animated: true })}
                                 autoCapitalize="none"
                                 keyboardType="email-address"
                                 autoCorrect={false}
@@ -233,15 +238,14 @@ const AuthScreen = ({ navigation }: any) => {
 
                     <View style={styles.inputGroup}>
                         <Text style={styles.inputLabel}>Password</Text>
-                        <View style={styles.inputWrapper}>
-                            <Lock size={17} color={colors.textMuted} style={styles.inputIcon} />
+                        <View style={[styles.inputWrapper, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}>
+                            <Lock size={18} color={colors.textMuted} style={styles.inputIcon} />
                             <TextInput
-                                style={[styles.input, { paddingRight: 40 }]}
+                                style={[styles.input, { paddingRight: 40, color: colors.text }]}
                                 placeholder="Enter password"
-                                placeholderTextColor={colors.textSubtle}
+                                placeholderTextColor={colors.textMuted}
                                 value={password}
                                 onChangeText={setPassword}
-                                onFocus={() => scrollRef.current?.scrollTo({ y: 170, animated: true })}
                                 secureTextEntry={!showPassword}
                             />
                             <TouchableOpacity
@@ -250,9 +254,9 @@ const AuthScreen = ({ navigation }: any) => {
                                 activeOpacity={0.7}
                             >
                                 {showPassword ? (
-                                    <EyeOff size={17} color={colors.textMuted} />
+                                    <EyeOff size={18} color={colors.textMuted} />
                                 ) : (
-                                    <Eye size={17} color={colors.textMuted} />
+                                    <Eye size={18} color={colors.textMuted} />
                                 )}
                             </TouchableOpacity>
                         </View>
@@ -261,15 +265,14 @@ const AuthScreen = ({ navigation }: any) => {
                     {!isLogin && (
                         <View style={styles.inputGroup}>
                             <Text style={styles.inputLabel}>Confirm Password</Text>
-                            <View style={styles.inputWrapper}>
-                                <Lock size={17} color={colors.textMuted} style={styles.inputIcon} />
+                            <View style={[styles.inputWrapper, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}>
+                                <Lock size={18} color={colors.textMuted} style={styles.inputIcon} />
                                 <TextInput
-                                    style={styles.input}
+                                    style={[styles.input, { color: colors.text }]}
                                     placeholder="Repeat password"
-                                    placeholderTextColor={colors.textSubtle}
+                                    placeholderTextColor={colors.textMuted}
                                     value={confirmPassword}
                                     onChangeText={setConfirmPassword}
-                                    onFocus={() => scrollRef.current?.scrollTo({ y: 220, animated: true })}
                                     secureTextEntry={!showPassword}
                                 />
                             </View>
@@ -277,263 +280,187 @@ const AuthScreen = ({ navigation }: any) => {
                     )}
 
                     {/* Primary Button */}
-                    <TouchableOpacity
-                        style={[styles.primaryBtn, loading && { opacity: 0.7 }]}
+                    <TactileButton
+                        title={isLogin ? 'Sign In' : 'Create Account'}
                         onPress={handleAuth}
-                        disabled={loading}
-                        activeOpacity={0.85}
-                    >
-                        {loading ? (
-                            <ActivityIndicator color={colors.textInverse} size="small" />
-                        ) : (
-                            <View style={styles.btnContent}>
-                                <Text style={styles.primaryBtnText}>
-                                    {isLogin ? 'Sign In' : 'Create Account'}
-                                </Text>
-                                <ArrowRight size={17} color={colors.textInverse} style={{ marginLeft: 6 }} />
-                            </View>
-                        )}
-                    </TouchableOpacity>
+                        loading={loading}
+                        variant="primary"
+                        size="lg"
+                        fullWidth
+                        iconRight={ArrowRight}
+                        style={{ marginTop: 8 }}
+                    />
+
+                    {/* Google Drive OAuth Button */}
+                    <TactileButton
+                        title="Sign In with Google Drive"
+                        onPress={handleGoogleDriveOAuth}
+                        loading={loading}
+                        variant="primary"
+                        size="md"
+                        fullWidth
+                        icon={UploadCloud}
+                        style={{ marginTop: 10, backgroundColor: '#10B981' }}
+                    />
 
                     {/* Divider */}
                     <View style={styles.dividerRow}>
-                        <View style={styles.dividerLine} />
-                        <Text style={styles.dividerText}>or continue with</Text>
-                        <View style={styles.dividerLine} />
+                        <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
+                        <Text style={[styles.dividerText, { color: colors.textMuted }]}>or</Text>
+                        <View style={[styles.dividerLine, { backgroundColor: colors.border }]} />
                     </View>
 
                     {/* Instant Guest Mode Button */}
-                    <TouchableOpacity
-                        style={styles.guestBtn}
+                    <TactileButton
+                        title="Instant Guest Session"
                         onPress={handleGuestLogin}
                         disabled={loading}
-                        activeOpacity={0.8}
-                    >
-                        <Zap size={16} color={colors.accent} style={{ marginRight: 8 }} />
-                        <Text style={styles.guestBtnText}>Instant Guest Session</Text>
-                    </TouchableOpacity>
-                </View>
+                        variant="secondary"
+                        size="md"
+                        fullWidth
+                        icon={Zap}
+                    />
+                </TactileCard>
 
                 {/* Footer Note */}
-                <Text style={styles.footerNote}>
-                    Document vectors and study data are securely partitioned per session.
+                <Text style={[styles.footerNote, { color: colors.textMuted }]}>
+                    Study notes and vector embeddings are securely partitioned per user.
                 </Text>
             </ScrollView>
         </KeyboardAvoidingView>
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) => StyleSheet.create({
-    container: {
-        flex: 1,
-        backgroundColor: colors.bg,
-    },
-    scrollContainer: {
-        flexGrow: 1,
-        justifyContent: 'center',
-        paddingHorizontal: spacing.lg,
-        paddingVertical: spacing.xxl,
-    },
-    brandContainer: {
-        alignItems: 'center',
-        marginBottom: spacing.xl,
-    },
-    logoBadge: {
-        width: 72,
-        height: 72,
-        borderRadius: radii.xl,
-        backgroundColor: colors.surface,
-        borderWidth: 1,
-        borderColor: colors.borderLight,
-        justifyContent: 'center',
-        alignItems: 'center',
-        marginBottom: spacing.md,
-        ...shadows.card,
-    },
-    logoImage: {
-        width: 52,
-        height: 52,
-        resizeMode: 'contain',
-    },
-    brandTitle: {
-        color: colors.text,
-        fontSize: typography.sizes.xxl,
-        fontWeight: '700',
-        letterSpacing: -0.5,
-    },
-    brandSubtitle: {
-        color: colors.textMuted,
-        fontSize: typography.sizes.sm,
-        textAlign: 'center',
-        lineHeight: 20,
-        maxWidth: 320,
-        marginTop: spacing.xs,
-    },
-    authStatusBadgeFirebase: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.warningMuted,
-        borderWidth: 1,
-        borderColor: 'rgba(245, 158, 11, 0.25)',
-        paddingHorizontal: spacing.md,
-        paddingVertical: 5,
-        borderRadius: radii.full,
-        marginTop: spacing.sm,
-    },
-    authStatusBadgeExpo: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.accentMuted,
-        borderWidth: 1,
-        borderColor: colors.accentBorder,
-        paddingHorizontal: spacing.md,
-        paddingVertical: 5,
-        borderRadius: radii.full,
-        marginTop: spacing.sm,
-    },
-    badgeTextFirebase: {
-        color: colors.warning,
-        fontSize: typography.sizes.xs,
-        fontWeight: '600',
-    },
-    badgeTextExpo: {
-        color: colors.accent,
-        fontSize: typography.sizes.xs,
-        fontWeight: '600',
-    },
-    card: {
-        backgroundColor: colors.surface,
-        borderRadius: radii.xl,
-        borderWidth: 1,
-        borderColor: colors.border,
-        padding: spacing.lg,
-        ...shadows.card,
-    },
-    cardNav: {
-        flexDirection: 'row',
-        backgroundColor: colors.surfaceSubtle,
-        borderRadius: radii.md,
-        padding: 3,
-        marginBottom: spacing.lg,
-    },
-    cardNavTab: {
-        flex: 1,
-        paddingVertical: 9,
-        alignItems: 'center',
-        borderRadius: radii.sm,
-    },
-    cardNavTabActive: {
-        backgroundColor: colors.surfaceRaised,
-        ...shadows.card,
-    },
-    cardNavText: {
-        color: colors.textMuted,
-        fontSize: typography.sizes.sm,
-        fontWeight: '600',
-    },
-    cardNavTextActive: {
-        color: colors.text,
-        fontWeight: '700',
-    },
-    errorBox: {
-        backgroundColor: colors.dangerMuted,
-        borderWidth: 1,
-        borderColor: 'rgba(239, 68, 68, 0.3)',
-        borderRadius: radii.md,
-        padding: spacing.sm,
-        marginBottom: spacing.md,
-    },
-    errorText: {
-        color: colors.danger,
-        fontSize: typography.sizes.xs,
-        textAlign: 'center',
-        fontWeight: '500',
-    },
-    inputGroup: {
-        marginBottom: spacing.md,
-    },
-    inputLabel: {
-        color: colors.textSecondary,
-        fontSize: typography.sizes.xs,
-        fontWeight: '600',
-        marginBottom: 6,
-        marginLeft: 2,
-    },
-    inputWrapper: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        backgroundColor: colors.surfaceSubtle,
-        borderWidth: 1,
-        borderColor: colors.border,
-        borderRadius: radii.md,
-        paddingHorizontal: spacing.sm,
-    },
-    inputIcon: {
-        marginRight: 8,
-    },
-    input: {
-        flex: 1,
-        color: colors.text,
-        fontSize: typography.sizes.md,
-        paddingVertical: 12,
-    },
-    passwordToggle: {
-        padding: 6,
-    },
-    primaryBtn: {
-        backgroundColor: colors.accent,
-        borderRadius: radii.md,
-        paddingVertical: 14,
-        alignItems: 'center',
-        justifyContent: 'center',
-        marginTop: spacing.xs,
-        ...shadows.glowAccent,
-    },
-    btnContent: {
-        flexDirection: 'row',
-        alignItems: 'center',
-    },
-    primaryBtnText: {
-        color: colors.textInverse,
-        fontSize: typography.sizes.md,
-        fontWeight: '700',
-    },
-    dividerRow: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        marginVertical: spacing.lg,
-    },
-    dividerLine: {
-        flex: 1,
-        height: 1,
-        backgroundColor: colors.border,
-    },
-    dividerText: {
-        color: colors.textSubtle,
-        fontSize: typography.sizes.xs,
-        paddingHorizontal: spacing.sm,
-    },
-    guestBtn: {
-        flexDirection: 'row',
-        alignItems: 'center',
-        justifyContent: 'center',
-        backgroundColor: colors.accentMuted,
-        borderWidth: 1,
-        borderColor: colors.accentBorder,
-        borderRadius: radii.md,
-        paddingVertical: 12,
-    },
-    guestBtnText: {
-        color: colors.accent,
-        fontSize: typography.sizes.sm,
-        fontWeight: '700',
-    },
-    footerNote: {
-        color: colors.textSubtle,
-        fontSize: typography.sizes.xs,
-        textAlign: 'center',
-        marginTop: spacing.xl,
-    },
-});
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
+    StyleSheet.create({
+        container: {
+            flex: 1,
+            backgroundColor: colors.bg,
+        },
+        scrollContainer: {
+            flexGrow: 1,
+            justifyContent: 'center',
+            paddingHorizontal: 20,
+            paddingTop: topGap,
+            paddingBottom: 32,
+        },
+        brandContainer: {
+            alignItems: 'center',
+            marginBottom: 20,
+        },
+        logoBadge: {
+            width: 76,
+            height: 76,
+            borderRadius: radii.xxl,
+            backgroundColor: colors.surface,
+            borderWidth: 2,
+            borderColor: colors.border,
+            justifyContent: 'center',
+            alignItems: 'center',
+            marginBottom: 12,
+        },
+        logoImage: {
+            width: 56,
+            height: 56,
+            borderRadius: radii.md,
+            resizeMode: 'contain',
+        },
+        brandTitle: {
+            color: colors.text,
+            fontSize: typography.sizes.xl,
+            fontWeight: '800',
+            letterSpacing: -0.3,
+        },
+        brandSubtitle: {
+            color: colors.textMuted,
+            fontSize: typography.sizes.sm,
+            textAlign: 'center',
+            lineHeight: 20,
+            maxWidth: 320,
+            marginTop: 6,
+            fontWeight: '500',
+        },
+        cardNav: {
+            flexDirection: 'row',
+            backgroundColor: colors.surfaceRaised,
+            borderRadius: radii.lg,
+            padding: 4,
+            marginBottom: 16,
+        },
+        cardNavTab: {
+            flex: 1,
+            paddingVertical: 10,
+            alignItems: 'center',
+            borderRadius: radii.md,
+        },
+        cardNavText: {
+            color: colors.textMuted,
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
+        },
+        errorBox: {
+            borderWidth: 1.5,
+            borderRadius: radii.md,
+            padding: 10,
+            marginBottom: 12,
+        },
+        errorText: {
+            fontSize: typography.sizes.xs,
+            textAlign: 'center',
+            fontWeight: '700',
+        },
+        inputGroup: {
+            marginBottom: 14,
+        },
+        inputLabel: {
+            color: colors.textSecondary,
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            marginBottom: 6,
+        },
+        inputWrapper: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            borderWidth: 2,
+            borderRadius: radii.md,
+            paddingHorizontal: 12,
+            height: 48,
+        },
+        inputIcon: {
+            marginRight: 8,
+        },
+        input: {
+            flex: 1,
+            fontSize: typography.sizes.sm,
+            fontWeight: '600',
+            paddingVertical: 0,
+        },
+        passwordToggle: {
+            padding: 6,
+        },
+        dividerRow: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            marginVertical: 16,
+        },
+        dividerLine: {
+            flex: 1,
+            height: 1.5,
+        },
+        dividerText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
+            textTransform: 'uppercase',
+            paddingHorizontal: 12,
+        },
+        footerNote: {
+            fontSize: typography.sizes.xs,
+            textAlign: 'center',
+            marginTop: 20,
+            fontWeight: '500',
+        },
+    });
 
 export default AuthScreen;

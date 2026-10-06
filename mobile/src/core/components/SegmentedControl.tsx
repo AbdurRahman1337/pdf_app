@@ -37,14 +37,17 @@ export function SegmentedControl<T extends string = string>({
                 key={opt.key}
                 style={[
                     isScroll ? styles.scrollSegment : styles.segment,
-                    { borderRadius: radii.sm },
+                    { borderRadius: radii.md },
                     isSelected && {
                         backgroundColor: colors.accent,
-                        ...shadows.glowAccent,
+                        borderBottomWidth: 3,
+                        borderBottomColor: colors.buttonEdge,
                     },
                 ]}
                 onPress={() => onSelect(opt.key)}
-                activeOpacity={0.7}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityState={{ selected: isSelected }}
             >
                 {IconComponent && (
                     <IconComponent
@@ -59,6 +62,7 @@ export function SegmentedControl<T extends string = string>({
                             fontSize: isScroll ? (typography.sizes.xs + 1) : typography.sizes.sm,
                             color: isSelected ? colors.textInverse : colors.textMuted,
                             marginLeft: IconComponent ? 6 : 0,
+                            fontWeight: isSelected ? '800' : '700',
                         },
                     ]}
                     numberOfLines={1}
@@ -72,7 +76,7 @@ export function SegmentedControl<T extends string = string>({
                             styles.badge,
                             {
                                 backgroundColor: isSelected
-                                    ? 'rgba(0, 0, 0, 0.2)'
+                                    ? 'rgba(0, 0, 0, 0.25)'
                                     : colors.surfaceHover,
                             },
                         ]}
@@ -81,8 +85,9 @@ export function SegmentedControl<T extends string = string>({
                             style={[
                                 styles.badgeText,
                                 {
-                                    fontSize: typography.sizes.xs,
+                                    fontSize: 10,
                                     color: isSelected ? colors.textInverse : colors.textMuted,
+                                    fontWeight: '800',
                                 },
                             ]}
                         >
@@ -100,9 +105,9 @@ export function SegmentedControl<T extends string = string>({
                 style={[
                     styles.container,
                     {
-                        backgroundColor: colors.surfaceSubtle,
+                        backgroundColor: colors.surfaceRaised,
                         borderColor: colors.border,
-                        borderRadius: radii.md,
+                        borderRadius: radii.xl,
                     },
                     style,
                 ]}
@@ -123,9 +128,9 @@ export function SegmentedControl<T extends string = string>({
             style={[
                 styles.container,
                 {
-                    backgroundColor: colors.surfaceSubtle,
+                    backgroundColor: colors.surfaceRaised,
                     borderColor: colors.border,
-                    borderRadius: radii.md,
+                    borderRadius: radii.xl,
                 },
                 style,
             ]}
@@ -139,7 +144,7 @@ const styles = StyleSheet.create({
     container: {
         flexDirection: 'row',
         padding: 4,
-        borderWidth: 1,
+        borderWidth: 2,
     },
     segment: {
         flex: 1,
@@ -162,7 +167,7 @@ const styles = StyleSheet.create({
         marginRight: 4,
     },
     label: {
-        fontWeight: '600',
+        letterSpacing: 0.2,
     },
     badge: {
         paddingHorizontal: 6,
@@ -171,7 +176,7 @@ const styles = StyleSheet.create({
         marginLeft: 6,
     },
     badgeText: {
-        fontWeight: '700',
+        fontWeight: '800',
     },
 });
 

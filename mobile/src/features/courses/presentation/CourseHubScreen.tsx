@@ -44,13 +44,18 @@ import {
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import ttsService from '../../../core/tts/ttsService';
-import { useTheme } from '../../../core/theme/ThemeContext';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
 import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import SegmentedControl from '../../../core/components/SegmentedControl';
 import EmptyState from '../../../core/components/EmptyState';
 import CitationModal from '../../../core/components/CitationModal';
 import { CardSkeleton, ParagraphSkeleton } from '../../../core/components/LoadingSkeleton';
 import { LAST_STUDY_CONTEXT_KEY, DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc } from '../../pdf-list/presentation/DashboardScreen';
+import {
+    loadCoursesHierarchy,
+    loadDocumentAnalysis,
+    saveDocumentAnalysis,
+} from '../../../core/db/database';
 
 type HubSectionTab = 'summary' | 'words' | 'quiz' | 'ask';
 type SummaryLength = 'brief' | 'standard' | 'detailed';
@@ -87,7 +92,8 @@ interface ChatMessage {
 const CourseHubScreen = ({ route, navigation }: any) => {
     const routeParams = route?.params || {};
     const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     // Active Context State (Course -> Subject -> PDF)
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
@@ -149,15 +155,21 @@ const CourseHubScreen = ({ route, navigation }: any) => {
 
     const loadStudyContext = async () => {
         try {
-            const savedCoursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
-            let loadedCourses = [DEFAULT_INITIAL_COURSE];
-            if (savedCoursesRaw) {
-                const parsed = JSON.parse(savedCoursesRaw);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    loadedCourses = parsed;
-                    setCourses(parsed);
+            let loadedCourses = await loadCoursesHierarchy();
+            if (!loadedCourses || loadedCourses.length === 0) {
+                const savedCoursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
+                if (savedCoursesRaw) {
+                    const parsed = JSON.parse(savedCoursesRaw);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        loadedCourses = parsed;
+                    }
                 }
             }
+
+            if (!loadedCourses || loadedCourses.length === 0) {
+                loadedCourses = [DEFAULT_INITIAL_COURSE];
+            }
+            setCourses(loadedCourses);
 
             // Check if passed via route params
             let targetCourseId = routeParams.courseId;
@@ -174,13 +186,13 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                 }
             }
 
-            const c = loadedCourses.find((item) => item.id === targetCourseId) || loadedCourses[0];
+            const c = loadedCourses.find((item: any) => item.id === targetCourseId) || loadedCourses[0];
             setSelectedCourse(c);
 
-            const s = c.subjects.find((sub) => sub.id === targetSubjectId) || c.subjects[0];
+            const s = c.subjects.find((sub: any) => sub.id === targetSubjectId) || c.subjects[0];
             setSelectedSubject(s);
 
-            const d = s?.documents.find((doc) => doc.id === targetDocId) || s?.documents[0] || null;
+            const d = s?.documents?.find((doc: any) => doc.id === targetDocId) || s?.documents?.[0] || null;
             setSelectedDoc(d);
 
             if (d || s) {
@@ -197,11 +209,48 @@ const CourseHubScreen = ({ route, navigation }: any) => {
         setWordsLoading(true);
 
         try {
+            // First check local SQLite cache for immediate offline response
+            const cached = await loadDocumentAnalysis(id);
+            if (cached) {
+                const rawPoints = cached.main_points.split('\n').filter((p: string) => p.trim().length > 0);
+                setSummaryData({
+                    overview: cached.summary_brief,
+                    keyPoints: rawPoints.length > 0 ? rawPoints : [
+                        'Cellular compartmentalization enables specialization of metabolic pathways.',
+                        'Adenosine triphosphate (ATP) acts as the primary biochemical energy currency.',
+                        'Membrane selective permeability regulates homeostasis and signal transduction.',
+                    ],
+                    sections: [
+                        {
+                            title: '1. Primary Architecture & Molecular Transport',
+                            content: cached.summary_brief,
+                            page: 2,
+                        },
+                    ],
+                });
+
+                const rawVocab = cached.vocabulary || [];
+                const builtWords: WordCardItem[] = rawVocab.map((v: any, idx: number) => ({
+                    id: `w_${idx}`,
+                    term: v.term,
+                    part_of_speech: idx % 2 === 0 ? 'noun' : 'adjective',
+                    definition: v.definition,
+                    sentence: `In physiological cellular conditions, ${v.term.toLowerCase()} plays a decisive regulatory role.`,
+                    page: (idx % 6) + 2,
+                    isKnown: false,
+                }));
+                if (builtWords.length > 0) {
+                    setWords(builtWords);
+                }
+            }
+
+            // Attempt online fetch from Gemini backend
             const res = await apiClient.get(`/pdf/${id}`).catch(() => null);
             if (res && res.data) {
                 const brief = res.data.summary_brief || 'Core curriculum overview extracted from notes.';
                 const mainPts = res.data.summary_details?.main_points || '';
                 const rawPoints = mainPts.split('\n').filter((p: string) => p.trim().length > 0);
+                const rawVocab = res.data.vocabulary || [];
 
                 setSummaryData({
                     overview: brief,
@@ -229,7 +278,6 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                     ],
                 });
 
-                const rawVocab = res.data.vocabulary || [];
                 const builtWords: WordCardItem[] = rawVocab.map((v: any, idx: number) => ({
                     id: `w_${idx}`,
                     term: v.term,
@@ -241,13 +289,25 @@ const CourseHubScreen = ({ route, navigation }: any) => {
                 }));
 
                 setWords(builtWords.length > 0 ? builtWords : getFallbackWords(subName));
-            } else {
+
+                // Save to SQLite
+                await saveDocumentAnalysis({
+                    doc_id: id,
+                    title: res.data.title || subName,
+                    summary_brief: brief,
+                    main_points: mainPts,
+                    vocabulary: rawVocab,
+                });
+            } else if (!cached) {
                 setSummaryData(getFallbackSummary(subName));
                 setWords(getFallbackWords(subName));
             }
         } catch (e) {
-            setSummaryData(getFallbackSummary(subName));
-            setWords(getFallbackWords(subName));
+            const cached = await loadDocumentAnalysis(id);
+            if (!cached) {
+                setSummaryData(getFallbackSummary(subName));
+                setWords(getFallbackWords(subName));
+            }
         } finally {
             setSummaryLoading(false);
             setWordsLoading(false);
@@ -1352,7 +1412,7 @@ const CourseHubScreen = ({ route, navigation }: any) => {
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
     StyleSheet.create({
         container: {
             flex: 1,
@@ -1362,7 +1422,7 @@ const createStyles = (colors: ThemeColors) =>
             backgroundColor: colors.surface,
             borderBottomWidth: 1,
             borderBottomColor: colors.border,
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             paddingBottom: 8,
         },
         courseTitleRow: {
@@ -2040,6 +2100,7 @@ const createStyles = (colors: ThemeColors) =>
             flex: 1,
             backgroundColor: colors.bg,
             padding: 20,
+            paddingTop: topGap,
         },
         flashcardModalHeader: {
             flexDirection: 'row',

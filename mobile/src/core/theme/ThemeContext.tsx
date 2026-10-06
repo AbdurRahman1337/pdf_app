@@ -114,4 +114,6 @@ export const useTheme = (): ThemeContextValue => {
     return context;
 };
 
+export { useSafeTopGap, getStaticSafeTopGap } from './useSafeTopGap';
+
 export default ThemeContext;

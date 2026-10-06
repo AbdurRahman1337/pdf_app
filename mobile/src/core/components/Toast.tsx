@@ -45,8 +45,8 @@ export const Toast: React.FC<ToastProps> = ({
 
     return (
         <View style={styles.wrapper} pointerEvents="box-none">
-            <View style={[styles.container, shadows.card]}>
-                <Icon size={18} color={iconColor} strokeWidth={1.5} style={styles.icon} />
+            <View style={[styles.container, shadows.modal]}>
+                <Icon size={20} color={iconColor} strokeWidth={2.5} style={styles.icon} />
                 <Text style={styles.message} numberOfLines={2}>
                     {message}
                 </Text>
@@ -54,10 +54,10 @@ export const Toast: React.FC<ToastProps> = ({
                     <TouchableOpacity
                         style={styles.actionBtn}
                         onPress={onAction}
-                        activeOpacity={0.7}
+                        activeOpacity={0.75}
                         accessibilityRole="button"
                     >
-                        <RotateCcw size={14} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 4 }} />
+                        <RotateCcw size={14} color={colors.accent} strokeWidth={2} style={{ marginRight: 4 }} />
                         <Text style={[styles.actionText, { color: colors.accent }]}>
                             {actionLabel}
                         </Text>
@@ -72,9 +72,9 @@ const createStyles = (colors: ThemeColors) =>
     StyleSheet.create({
         wrapper: {
             position: 'absolute',
-            bottom: 80,
-            left: 16,
-            right: 16,
+            bottom: 85,
+            left: 20,
+            right: 20,
             alignItems: 'center',
             zIndex: 999,
         },
@@ -82,11 +82,11 @@ const createStyles = (colors: ThemeColors) =>
             flexDirection: 'row',
             alignItems: 'center',
             backgroundColor: colors.surface,
-            borderWidth: 1,
+            borderWidth: 2,
             borderColor: colors.border,
-            borderRadius: radii.md,
-            paddingVertical: 10,
-            paddingHorizontal: 14,
+            borderRadius: radii.xl,
+            paddingVertical: 12,
+            paddingHorizontal: 16,
             maxWidth: 440,
             width: '100%',
         },
@@ -98,21 +98,21 @@ const createStyles = (colors: ThemeColors) =>
             fontSize: typography.sizes.sm,
             color: colors.text,
             lineHeight: 18,
+            fontWeight: '600',
         },
         actionBtn: {
             flexDirection: 'row',
             alignItems: 'center',
             paddingVertical: 6,
-            paddingHorizontal: 10,
+            paddingHorizontal: 12,
             marginLeft: 8,
-            borderRadius: radii.sm,
+            borderRadius: radii.full,
             backgroundColor: colors.accentMuted,
         },
         actionText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '800',
         },
     });
 
 export default Toast;
-

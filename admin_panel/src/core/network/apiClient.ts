@@ -7,7 +7,7 @@
 import axios, { InternalAxiosRequestConfig } from 'axios';
 import auth from '@react-native-firebase/auth';
 
-const API_BASE_URL = 'http://192.168.0.115:8000/api/v1';
+const API_BASE_URL = 'http://10.131.209.71:8000/api/v1';
 
 const apiClient = axios.create({
     baseURL: API_BASE_URL,

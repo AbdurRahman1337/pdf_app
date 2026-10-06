@@ -125,6 +125,12 @@ apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) =>
     } else {
         config.headers['X-Session-ID'] = 'session_default';
     }
+
+    const googleToken = authService.getGoogleAccessToken();
+    if (googleToken) {
+        config.headers['X-Google-Access-Token'] = googleToken;
+    }
+
     return config;
 });
 

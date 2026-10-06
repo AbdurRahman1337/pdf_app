@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
     View,
     Text,
@@ -9,6 +9,8 @@ import {
     TextInput,
     Alert,
     ScrollView,
+    Animated,
+    Platform,
 } from 'react-native';
 import {
     ChevronLeft,
@@ -30,6 +32,7 @@ import {
     Clock,
     Flame,
     FileText,
+    Award,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
 import ttsService from '../../../core/tts/ttsService';
@@ -42,11 +45,15 @@ import {
     isCardDue,
     RecallRating,
 } from '../../../core/study/spacedRepetition';
-import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import SegmentedControl from '../../../core/components/SegmentedControl';
 import EmptyState from '../../../core/components/EmptyState';
 import { CardSkeleton } from '../../../core/components/LoadingSkeleton';
+import TactileButton from '../../../core/components/TactileButton';
+import TactileCard from '../../../core/components/TactileCard';
+import TactileProgressBar from '../../../core/components/TactileProgressBar';
+import CelebrationOverlay from '../../../core/components/CelebrationOverlay';
 
 const formatTitle = (name?: string) => {
     if (!name) return 'Vocabulary Bank';
@@ -62,8 +69,9 @@ const VocabularyScreen = ({ route, navigation }: any) => {
     const initialPdfId = routeParams.pdfId;
     const initialTitle = routeParams.title ? formatTitle(routeParams.title) : '';
 
-    const { colors, shadows } = useTheme();
-    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+    const { colors, shadows, isDark } = useTheme();
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     // Document state
     const [docs, setDocs] = useState<any[]>([]);
@@ -75,7 +83,7 @@ const VocabularyScreen = ({ route, navigation }: any) => {
     const [loading, setLoading] = useState(true);
     const [searchQuery, setSearchQuery] = useState('');
     const [filterMode, setFilterMode] = useState<'all' | 'due' | 'learning' | 'mastered'>('all');
-    const [viewMode, setViewMode] = useState<'list' | 'flashcards'>('flashcards');
+    const [viewMode, setViewMode] = useState<'flashcards' | 'list'>('flashcards');
 
     // Translation state
     const [translating, setTranslating] = useState<string | null>(null);
@@ -86,6 +94,9 @@ const VocabularyScreen = ({ route, navigation }: any) => {
     const [isFlipped, setIsFlipped] = useState(false);
     const [isSpeaking, setIsSpeaking] = useState(false);
     const [studyCompleted, setStudyCompleted] = useState(false);
+
+    // 3D Flip animation
+    const flipAnim = useRef(new Animated.Value(0)).current;
 
     useEffect(() => {
         fetchDocs();
@@ -123,11 +134,33 @@ const VocabularyScreen = ({ route, navigation }: any) => {
             setSpacedCards(loadedSpaced);
             setCurrentCardIndex(0);
             setIsFlipped(false);
+            flipAnim.setValue(0);
             setStudyCompleted(false);
         } catch (err) {
             console.error('Failed to fetch vocabulary bank:', err);
         } finally {
             setLoading(false);
+        }
+    };
+
+    // ── 3D Card Flip Handler ──
+    const handleFlipCard = () => {
+        if (isFlipped) {
+            Animated.spring(flipAnim, {
+                toValue: 0,
+                friction: 8,
+                tension: 10,
+                useNativeDriver: true,
+            }).start();
+            setIsFlipped(false);
+        } else {
+            Animated.spring(flipAnim, {
+                toValue: 180,
+                friction: 8,
+                tension: 10,
+                useNativeDriver: true,
+            }).start();
+            setIsFlipped(true);
         }
     };
 
@@ -165,7 +198,8 @@ const VocabularyScreen = ({ route, navigation }: any) => {
         setSpacedCards(updatedList);
         await saveSpacedCards(selectedDocId, updatedList);
 
-        // Advance to next card or complete deck
+        // Reset flip
+        flipAnim.setValue(0);
         setIsFlipped(false);
         handleStopSpeech();
 
@@ -198,7 +232,7 @@ const VocabularyScreen = ({ route, navigation }: any) => {
             .join('\n');
         Alert.alert(
             'Export Vocabulary',
-            `Exported ${spacedCards.length} terminology cards formatted for Anki/CSV:\n\n${csvContent.substring(0, 160)}...`
+            `Exported ${spacedCards.length} cards formatted for CSV/Anki:\n\n${csvContent.substring(0, 160)}...`
         );
     };
 
@@ -224,6 +258,16 @@ const VocabularyScreen = ({ route, navigation }: any) => {
 
     const activeCard = spacedCards[currentCardIndex];
 
+    // Card Rotation Interpolations for 3D Flip
+    const frontInterpolate = flipAnim.interpolate({
+        inputRange: [0, 180],
+        outputRange: ['0deg', '180deg'],
+    });
+    const backInterpolate = flipAnim.interpolate({
+        inputRange: [0, 180],
+        outputRange: ['180deg', '360deg'],
+    });
+
     return (
         <View style={styles.container}>
             {/* ── Top Header ── */}
@@ -237,15 +281,15 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                     accessibilityLabel="Go Back"
                 >
-                    <ChevronLeft size={22} color={colors.text} />
+                    <ArrowLeft size={20} color={colors.text} strokeWidth={2} />
                 </TouchableOpacity>
 
                 <View style={styles.titleContainer}>
                     <Text style={styles.headerTitle} numberOfLines={1}>
-                        {docTitle || 'Flashcards & Spaced Recall'}
+                        {docTitle || 'Flashcards & Words'}
                     </Text>
                     <Text style={styles.headerSub}>
-                        {stats.dueCount} Due Today • {stats.masteredCount} Mastered • SM-2 Engine
+                        {stats.dueCount} Due · {stats.masteredCount} Mastered · SM-2 Algorithm
                     </Text>
                 </View>
 
@@ -255,7 +299,7 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                     activeOpacity={0.7}
                     accessibilityLabel="Export Cards"
                 >
-                    <Share2 size={17} color={colors.textMuted} />
+                    <Share2 size={18} color={colors.textMuted} strokeWidth={2} />
                 </TouchableOpacity>
             </View>
 
@@ -272,9 +316,9 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                                     onPress={() => setSelectedDocId(d.id)}
                                 >
                                     <FileText
-                                        size={12}
+                                        size={13}
                                         color={isSel ? colors.textInverse : colors.textMuted}
-                                        style={{ marginRight: 5 }}
+                                        style={{ marginRight: 6 }}
                                     />
                                     <Text
                                         style={[styles.docChipText, isSel && styles.docChipTextActive]}
@@ -293,16 +337,16 @@ const VocabularyScreen = ({ route, navigation }: any) => {
             <View style={styles.viewModeContainer}>
                 <SegmentedControl
                     options={[
-                        { key: 'flashcards', label: 'SM-2 Spaced Deck', icon: GraduationCap },
-                        { key: 'list', label: 'Terminology Bank', icon: Layers },
+                        { key: 'flashcards', label: 'Flashcard Deck', icon: GraduationCap },
+                        { key: 'list', label: 'Word Bank', icon: Layers },
                     ]}
                     selectedKey={viewMode}
-                    onSelect={(mode) => setViewMode(mode as 'list' | 'flashcards')}
+                    onSelect={(mode) => setViewMode(mode as 'flashcards' | 'list')}
                 />
             </View>
 
             {/* ================================================================= */}
-            {/* FLASHCARD STUDY MODE (SM-2 ALGORITHM) */}
+            {/* FLASHCARD STUDY MODE (3D FLIP + SM-2) */}
             {/* ================================================================= */}
             {viewMode === 'flashcards' ? (
                 loading ? (
@@ -313,62 +357,64 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                     <EmptyState
                         icon={Book}
                         title="No vocabulary indexed yet"
-                        description="Upload a study document to automatically generate your active recall flashcard deck."
+                        description="Upload your study materials to automatically generate active recall flashcards."
                     />
                 ) : studyCompleted ? (
                     /* Study Deck Completion Summary */
                     <View style={styles.completionContainer}>
-                        <View style={styles.completionCard}>
-                            <View style={styles.trophyIconBg}>
-                                <GraduationCap size={44} color={colors.accent} />
+                        <TactileCard contentStyle={{ padding: 24, alignItems: 'center' }}>
+                            <View style={[styles.trophyIconBg, { backgroundColor: colors.accentMuted }]}>
+                                <Award size={48} color={colors.accent} strokeWidth={2.5} />
                             </View>
                             <Text style={styles.completionTitle}>Daily Review Complete!</Text>
                             <Text style={styles.completionSub}>
-                                Your SuperMemo-2 spaced intervals have been updated based on your recall accuracy.
+                                Great job! Your spaced intervals have been updated based on your recall accuracy.
                             </Text>
 
                             <View style={styles.scoreRow}>
                                 <View style={styles.scoreBox}>
-                                    <Text style={[styles.scoreNum, { color: colors.success }]}>
+                                    <Text style={[styles.scoreNum, { color: colors.accent }]}>
                                         {stats.masteredCount}
                                     </Text>
                                     <Text style={styles.scoreLabel}>Mastered</Text>
                                 </View>
                                 <View style={styles.scoreBox}>
-                                    <Text style={[styles.scoreNum, { color: colors.warning }]}>
+                                    <Text style={[styles.scoreNum, { color: colors.gold }]}>
                                         {stats.learningCount}
                                     </Text>
                                     <Text style={styles.scoreLabel}>In Learning</Text>
                                 </View>
                                 <View style={styles.scoreBox}>
-                                    <Text style={[styles.scoreNum, { color: colors.accent }]}>
+                                    <Text style={[styles.scoreNum, { color: colors.blue }]}>
                                         {stats.total}
                                     </Text>
                                     <Text style={styles.scoreLabel}>Total Deck</Text>
                                 </View>
                             </View>
 
-                            <TouchableOpacity
-                                style={styles.restartBtn}
+                            <TactileButton
+                                title="Review Deck Again"
                                 onPress={() => {
                                     setCurrentCardIndex(0);
                                     setIsFlipped(false);
+                                    flipAnim.setValue(0);
                                     setStudyCompleted(false);
                                 }}
-                                activeOpacity={0.85}
-                            >
-                                <RotateCw size={16} color={colors.textInverse} style={{ marginRight: 6 }} />
-                                <Text style={styles.restartBtnText}>Review Deck Again</Text>
-                            </TouchableOpacity>
+                                variant="primary"
+                                size="lg"
+                                fullWidth
+                                icon={RotateCw}
+                                style={{ marginBottom: 10 }}
+                            />
 
-                            <TouchableOpacity
-                                style={styles.backToListBtn}
+                            <TactileButton
+                                title="View Terminology Bank"
                                 onPress={() => setViewMode('list')}
-                                activeOpacity={0.8}
-                            >
-                                <Text style={styles.backToListText}>View Terminology Bank</Text>
-                            </TouchableOpacity>
-                        </View>
+                                variant="secondary"
+                                size="md"
+                                fullWidth
+                            />
+                        </TactileCard>
                     </View>
                 ) : (
                     /* Active SM-2 Flashcard */
@@ -380,138 +426,173 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                                     Card {currentCardIndex + 1} of {spacedCards.length}
                                 </Text>
                                 {activeCard?.intervalDays > 0 && (
-                                    <View style={styles.intervalBadge}>
-                                        <Clock size={11} color={colors.textMuted} />
+                                    <View style={[styles.intervalBadge, { backgroundColor: colors.surfaceRaised }]}>
+                                        <Clock size={12} color={colors.textMuted} />
                                         <Text style={styles.intervalBadgeText}>
-                                            Interval: {activeCard.intervalDays}d (EF {activeCard.easeFactor.toFixed(1)})
+                                            Interval: {activeCard.intervalDays}d
                                         </Text>
                                     </View>
                                 )}
                             </View>
 
-                            <View style={styles.progressBar}>
-                                <View
-                                    style={[
-                                        styles.progressFill,
-                                        { width: `${((currentCardIndex + 1) / spacedCards.length) * 100}%` },
-                                    ]}
-                                />
-                            </View>
+                            <TactileProgressBar
+                                progress={((currentCardIndex + 1) / spacedCards.length) * 100}
+                                height={10}
+                                variant="accent"
+                            />
                         </View>
 
-                        {/* Interactive Flip Card */}
+                        {/* Interactive 3D Flip Card */}
                         <TouchableOpacity
-                            style={[
-                                styles.flashcard,
-                                isFlipped ? styles.flashcardBack : styles.flashcardFront,
-                            ]}
-                            onPress={() => setIsFlipped(!isFlipped)}
-                            activeOpacity={0.92}
+                            onPress={handleFlipCard}
+                            activeOpacity={0.95}
+                            style={styles.flipCardWrapper}
+                            accessibilityLabel="Flashcard, tap to flip"
                         >
-                            {/* Card Top Actions: Side Badge & TTS Speaker */}
-                            <View style={styles.cardTopRow}>
-                                <View style={styles.cardSideBadge}>
-                                    <Text style={styles.cardSideBadgeText}>
-                                        {isFlipped ? 'EXPLANATION & MEANING' : 'STUDY TERM'}
-                                    </Text>
+                            {/* Card Front */}
+                            <Animated.View
+                                style={[
+                                    styles.flashcardSurface,
+                                    {
+                                        backgroundColor: colors.surface,
+                                        borderColor: colors.border,
+                                        transform: [{ rotateY: frontInterpolate }],
+                                        backfaceVisibility: 'hidden',
+                                    },
+                                ]}
+                            >
+                                <View style={styles.cardTopRow}>
+                                    <View style={[styles.cardSideBadge, { backgroundColor: colors.blueMuted }]}>
+                                        <Text style={[styles.cardSideBadgeText, { color: colors.blueDark }]}>
+                                            TERM
+                                        </Text>
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={styles.ttsSpeakerBtn}
+                                        onPress={(e) => {
+                                            // @ts-ignore
+                                            e.stopPropagation?.();
+                                            if (isSpeaking) handleStopSpeech();
+                                            else handleSpeak(activeCard.term);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        {isSpeaking ? (
+                                            <VolumeX size={20} color={colors.accent} />
+                                        ) : (
+                                            <Volume2 size={20} color={colors.accent} />
+                                        )}
+                                    </TouchableOpacity>
                                 </View>
 
-                                <TouchableOpacity
-                                    style={styles.ttsSpeakerBtn}
-                                    onPress={(e) => {
-                                        e.stopPropagation();
-                                        if (isSpeaking) {
-                                            handleStopSpeech();
-                                        } else {
-                                            handleSpeak(
-                                                activeCard.term,
-                                                isFlipped ? activeCard.definition : undefined
-                                            );
-                                        }
-                                    }}
-                                    activeOpacity={0.7}
-                                    accessibilityLabel="Listen to pronunciation"
-                                >
-                                    {isSpeaking ? (
-                                        <VolumeX size={18} color={colors.accent} />
-                                    ) : (
-                                        <Volume2 size={18} color={colors.accent} />
-                                    )}
-                                </TouchableOpacity>
-                            </View>
-
-                            {/* Card Content Area */}
-                            {!isFlipped ? (
                                 <View style={styles.cardCenterContent}>
-                                    <Text style={styles.flashcardTerm}>{activeCard?.term}</Text>
-                                    <Text style={styles.tapToFlipHint}>
-                                        Tap card to reveal definition &amp; Feynman breakdown
+                                    <Text style={[styles.flashcardTerm, { color: colors.text }]}>
+                                        {activeCard?.term}
+                                    </Text>
+                                    <Text style={[styles.tapToFlipHint, { color: colors.textMuted }]}>
+                                        Tap card to reveal definition
                                     </Text>
                                 </View>
-                            ) : (
-                                <ScrollView
-                                    style={styles.cardBackScroll}
-                                    contentContainerStyle={styles.cardCenterContent}
-                                    showsVerticalScrollIndicator={false}
-                                >
-                                    <Text style={styles.flashcardDefinition}>
+
+                                <View style={styles.cardBottomIndicator}>
+                                    <Text style={[styles.cardStateText, { color: colors.textSubtle }]}>
+                                        Status: {activeCard?.state?.toUpperCase() || 'NEW'}
+                                    </Text>
+                                </View>
+                            </Animated.View>
+
+                            {/* Card Back */}
+                            <Animated.View
+                                style={[
+                                    styles.flashcardSurface,
+                                    styles.flashcardBackSurface,
+                                    {
+                                        backgroundColor: colors.surface,
+                                        borderColor: colors.accent,
+                                        transform: [{ rotateY: backInterpolate }],
+                                        backfaceVisibility: 'hidden',
+                                    },
+                                ]}
+                            >
+                                <View style={styles.cardTopRow}>
+                                    <View style={[styles.cardSideBadge, { backgroundColor: colors.accentMuted }]}>
+                                        <Text style={[styles.cardSideBadgeText, { color: colors.accent }]}>
+                                            MEANING &amp; CONTEXT
+                                        </Text>
+                                    </View>
+
+                                    <TouchableOpacity
+                                        style={styles.ttsSpeakerBtn}
+                                        onPress={(e) => {
+                                            // @ts-ignore
+                                            e.stopPropagation?.();
+                                            if (isSpeaking) handleStopSpeech();
+                                            else handleSpeak(activeCard.term, activeCard.definition);
+                                        }}
+                                        activeOpacity={0.7}
+                                    >
+                                        <Volume2 size={20} color={colors.accent} />
+                                    </TouchableOpacity>
+                                </View>
+
+                                <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.cardCenterContent}>
+                                    <Text style={[styles.flashcardDefinition, { color: colors.textSecondary }]}>
                                         {activeCard?.definition}
                                     </Text>
-                                    <Text style={styles.tapToFlipHint}>Tap to flip back</Text>
+                                    <Text style={[styles.tapToFlipHint, { color: colors.textMuted }]}>
+                                        Tap to flip back
+                                    </Text>
                                 </ScrollView>
-                            )}
 
-                            {/* Card Bottom State Indicator */}
-                            <View style={styles.cardBottomIndicator}>
-                                <Text style={styles.cardStateText}>
-                                    Status: {activeCard?.state?.toUpperCase() || 'NEW'}
-                                </Text>
-                            </View>
+                                <View style={styles.cardBottomIndicator}>
+                                    <Text style={[styles.cardStateText, { color: colors.accent }]}>
+                                        Rate recall below to advance
+                                    </Text>
+                                </View>
+                            </Animated.View>
                         </TouchableOpacity>
 
-                        {/* SM-2 4-Grade Feedback Matrix */}
+                        {/* SM-2 4-Grade Tactile Feedback Matrix */}
                         <View style={styles.gradeMatrixContainer}>
-                            <Text style={styles.gradeMatrixLabel}>Rate Your Recall Confidence (SM-2):</Text>
+                            <Text style={styles.gradeMatrixLabel}>Rate Your Recall Confidence:</Text>
                             <View style={styles.gradeButtonRow}>
-                                {/* Again: 1 Day */}
-                                <TouchableOpacity
-                                    style={[styles.sm2Btn, styles.againBtn]}
-                                    onPress={() => handleGradeCard('again')}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={[styles.sm2BtnText, { color: colors.danger }]}>Again</Text>
-                                    <Text style={styles.sm2SubText}>&lt; 1d</Text>
-                                </TouchableOpacity>
-
-                                {/* Hard: Slight Interval */}
-                                <TouchableOpacity
-                                    style={[styles.sm2Btn, styles.hardBtn]}
-                                    onPress={() => handleGradeCard('hard')}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={[styles.sm2BtnText, { color: colors.warning }]}>Hard</Text>
-                                    <Text style={styles.sm2SubText}>2d</Text>
-                                </TouchableOpacity>
-
-                                {/* Good: Standard Interval */}
-                                <TouchableOpacity
-                                    style={[styles.sm2Btn, styles.goodBtn]}
-                                    onPress={() => handleGradeCard('good')}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={[styles.sm2BtnText, { color: colors.accent }]}>Good</Text>
-                                    <Text style={styles.sm2SubText}>6d</Text>
-                                </TouchableOpacity>
-
-                                {/* Easy: Boosted Interval */}
-                                <TouchableOpacity
-                                    style={[styles.sm2Btn, styles.easyBtn]}
-                                    onPress={() => handleGradeCard('easy')}
-                                    activeOpacity={0.8}
-                                >
-                                    <Text style={[styles.sm2BtnText, { color: colors.success }]}>Easy</Text>
-                                    <Text style={styles.sm2SubText}>10d+</Text>
-                                </TouchableOpacity>
+                                <View style={{ flex: 1 }}>
+                                    <TactileButton
+                                        title="Again"
+                                        onPress={() => handleGradeCard('again')}
+                                        variant="danger"
+                                        size="sm"
+                                        fullWidth
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <TactileButton
+                                        title="Hard"
+                                        onPress={() => handleGradeCard('hard')}
+                                        variant="gold"
+                                        size="sm"
+                                        fullWidth
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <TactileButton
+                                        title="Good"
+                                        onPress={() => handleGradeCard('good')}
+                                        variant="primary"
+                                        size="sm"
+                                        fullWidth
+                                    />
+                                </View>
+                                <View style={{ flex: 1 }}>
+                                    <TactileButton
+                                        title="Easy"
+                                        onPress={() => handleGradeCard('easy')}
+                                        variant="blue"
+                                        size="sm"
+                                        fullWidth
+                                    />
+                                </View>
                             </View>
                         </View>
                     </View>
@@ -524,17 +605,17 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                     {/* Search & Filter Chips */}
                     <View style={styles.searchSection}>
                         <View style={styles.searchWrapper}>
-                            <Search size={15} color={colors.textSubtle} style={{ marginRight: 8 }} />
+                            <Search size={16} color={colors.textMuted} style={{ marginRight: 8 }} />
                             <TextInput
                                 style={styles.searchInput}
-                                placeholder="Search terms or concepts..."
-                                placeholderTextColor={colors.textSubtle}
+                                placeholder="Search terms or definitions..."
+                                placeholderTextColor={colors.textMuted}
                                 value={searchQuery}
                                 onChangeText={setSearchQuery}
                             />
                             {searchQuery.length > 0 && (
                                 <TouchableOpacity onPress={() => setSearchQuery('')} activeOpacity={0.7}>
-                                    <X size={15} color={colors.textMuted} />
+                                    <X size={16} color={colors.textMuted} />
                                 </TouchableOpacity>
                             )}
                         </View>
@@ -580,28 +661,28 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                         <FlatList
                             data={filteredVocab}
                             renderItem={({ item }) => (
-                                <View style={styles.card}>
+                                <TactileCard contentStyle={{ padding: 16 }}>
                                     <View style={styles.cardHeader}>
                                         <View style={{ flex: 1, marginRight: 8 }}>
                                             <View style={styles.termRow}>
                                                 <Text style={styles.term}>{item.term}</Text>
-                                                <View style={styles.posBadge}>
-                                                    <Text style={styles.posBadgeText}>{item.state}</Text>
+                                                <View style={[styles.posBadge, { backgroundColor: item.state === 'mastered' ? colors.accentMuted : colors.surfaceRaised }]}>
+                                                    <Text style={[styles.posBadgeText, { color: item.state === 'mastered' ? colors.accent : colors.textMuted }]}>
+                                                        {item.state}
+                                                    </Text>
                                                 </View>
                                             </View>
                                         </View>
 
                                         <View style={styles.cardActions}>
-                                            {/* Audio Pronunciation Button */}
                                             <TouchableOpacity
                                                 onPress={() => handleSpeak(item.term, item.definition)}
                                                 style={styles.actionIconBtn}
                                                 activeOpacity={0.7}
                                             >
-                                                <Volume2 size={16} color={colors.accent} />
+                                                <Volume2 size={18} color={colors.accent} />
                                             </TouchableOpacity>
 
-                                            {/* Spanish Translation Button */}
                                             <TouchableOpacity
                                                 onPress={() => handleTranslate(item.term, item.definition)}
                                                 disabled={!!translating}
@@ -611,9 +692,9 @@ const VocabularyScreen = ({ route, navigation }: any) => {
                                                 {translating === item.term ? (
                                                     <ActivityIndicator size="small" color={colors.accent} />
                                                 ) : translations[item.term] ? (
-                                                    <Check size={16} color={colors.success} />
+                                                    <Check size={18} color={colors.success} />
                                                 ) : (
-                                                    <Languages size={16} color={colors.accent} />
+                                                    <Languages size={18} color={colors.accent} />
                                                 )}
                                             </TouchableOpacity>
                                         </View>
@@ -621,17 +702,18 @@ const VocabularyScreen = ({ route, navigation }: any) => {
 
                                     <Text style={styles.definition}>{item.definition}</Text>
 
-                                    {/* Translation Preview */}
                                     {translations[item.term] && (
                                         <View style={styles.translationBox}>
                                             <View style={styles.translationHeader}>
-                                                <Sparkles size={12} color={colors.indigo} />
-                                                <Text style={styles.translationLabel}>Spanish Translation</Text>
+                                                <Sparkles size={12} color={colors.blueDark} />
+                                                <Text style={[styles.translationLabel, { color: colors.blueDark }]}>
+                                                    Spanish Translation
+                                                </Text>
                                             </View>
                                             <Text style={styles.translationText}>{translations[item.term]}</Text>
                                         </View>
                                     )}
-                                </View>
+                                </TactileCard>
                             )}
                             keyExtractor={(item) => item.id}
                             contentContainerStyle={styles.listContent}
@@ -655,12 +737,12 @@ const VocabularyScreen = ({ route, navigation }: any) => {
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
-            paddingTop: 50,
+            paddingTop: topGap,
         },
         centered: {
             flex: 1,
@@ -670,23 +752,15 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         headerRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: spacing.lg,
-            marginBottom: spacing.xs,
-        },
-        headerIconBg: {
-            width: 38,
-            height: 38,
-            borderRadius: radii.md,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
-            alignItems: 'center',
+            paddingHorizontal: 20,
+            marginBottom: 10,
         },
         backBtn: {
             width: 38,
             height: 38,
-            backgroundColor: colors.surfaceSubtle,
+            backgroundColor: colors.surface,
             borderRadius: radii.md,
-            borderWidth: 1,
+            borderWidth: 2,
             borderColor: colors.border,
             justifyContent: 'center',
             alignItems: 'center',
@@ -697,36 +771,37 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         },
         headerTitle: {
             color: colors.text,
-            fontSize: typography.sizes.base,
-            fontWeight: '700',
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
         },
         headerSub: {
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
+            fontSize: 11,
+            fontWeight: '600',
             marginTop: 1,
         },
         exportBtn: {
             width: 38,
             height: 38,
-            backgroundColor: colors.surfaceSubtle,
+            backgroundColor: colors.surface,
             borderRadius: radii.md,
-            borderWidth: 1,
+            borderWidth: 2,
             borderColor: colors.border,
             justifyContent: 'center',
             alignItems: 'center',
         },
         docPickerContainer: {
-            paddingHorizontal: spacing.lg,
-            marginVertical: spacing.xs,
+            paddingHorizontal: 20,
+            marginBottom: 10,
         },
         docChip: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: 10,
-            paddingVertical: 5,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
             borderRadius: radii.full,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
+            backgroundColor: colors.surface,
+            borderWidth: 1.5,
             borderColor: colors.border,
             marginRight: 6,
             maxWidth: 180,
@@ -738,76 +813,76 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         docChipText: {
             color: colors.textMuted,
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
         },
         docChipTextActive: {
             color: colors.textInverse,
-            fontWeight: '700',
+            fontWeight: '800',
         },
         viewModeContainer: {
-            paddingHorizontal: spacing.lg,
-            marginVertical: spacing.sm,
+            paddingHorizontal: 20,
+            marginBottom: 12,
         },
         flashcardContainer: {
             flex: 1,
-            paddingHorizontal: spacing.lg,
-            paddingBottom: 85, // Space for bottom tab bar
+            paddingHorizontal: 20,
+            paddingBottom: 110,
             justifyContent: 'space-between',
         },
         flashcardProgressHeader: {
-            marginBottom: spacing.xs,
+            marginBottom: 14,
         },
         cardMetaPillRow: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 6,
+            marginBottom: 8,
         },
         flashcardProgressText: {
             color: colors.textMuted,
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
         },
         intervalBadge: {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 4,
-            backgroundColor: colors.surfaceSubtle,
-            paddingHorizontal: 6,
-            paddingVertical: 2,
-            borderRadius: radii.xs,
+            paddingHorizontal: 8,
+            paddingVertical: 3,
+            borderRadius: radii.full,
         },
         intervalBadgeText: {
             color: colors.textMuted,
-            fontSize: 10,
-            fontWeight: '600',
+            fontSize: 11,
+            fontWeight: '700',
         },
-        progressBar: {
-            height: 4,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: 2,
-            overflow: 'hidden',
-        },
-        progressFill: {
-            height: '100%',
-            backgroundColor: colors.accent,
-        },
-        flashcard: {
+        flipCardWrapper: {
             flex: 1,
-            minHeight: 260,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.borderLight,
-            borderRadius: radii.xxl || 24,
-            padding: spacing.lg,
+            minHeight: 300,
+            position: 'relative',
+        },
+        flashcardSurface: {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            borderRadius: radii.xxl,
+            borderWidth: 2.5,
+            padding: 20,
             justifyContent: 'space-between',
-            ...shadows.card,
+            shadowColor: '#0F172A',
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.08,
+            shadowRadius: 12,
+            elevation: 4,
         },
-        flashcardFront: {
-            borderColor: colors.accentBorder,
-        },
-        flashcardBack: {
-            borderColor: colors.indigo,
+        flashcardBackSurface: {
+            position: 'absolute',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
         },
         cardTopRow: {
             flexDirection: 'row',
@@ -815,333 +890,233 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
             alignItems: 'center',
         },
         cardSideBadge: {
-            backgroundColor: colors.surfaceSubtle,
-            paddingHorizontal: 8,
+            paddingHorizontal: 10,
             paddingVertical: 4,
-            borderRadius: radii.xs,
+            borderRadius: radii.full,
         },
         cardSideBadgeText: {
-            color: colors.textSubtle,
-            fontSize: 9,
+            fontSize: 10,
             fontWeight: '800',
-            letterSpacing: 0.8,
+            letterSpacing: 0.5,
         },
         ttsSpeakerBtn: {
-            width: 34,
-            height: 34,
-            borderRadius: 17,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
-            alignItems: 'center',
+            padding: 8,
         },
         cardCenterContent: {
-            flex: 1,
-            justifyContent: 'center',
             alignItems: 'center',
-            paddingVertical: spacing.md,
-        },
-        cardBackScroll: {
-            flex: 1,
+            justifyContent: 'center',
+            paddingVertical: 20,
         },
         flashcardTerm: {
-            color: colors.text,
-            fontSize: typography.sizes.xl,
+            fontSize: 26,
             fontWeight: '800',
             textAlign: 'center',
             marginBottom: 12,
+            lineHeight: 32,
         },
         flashcardDefinition: {
-            color: colors.textSecondary,
             fontSize: typography.sizes.base,
             lineHeight: 26,
             textAlign: 'center',
+            marginBottom: 12,
             fontWeight: '500',
         },
         tapToFlipHint: {
-            color: colors.textSubtle,
             fontSize: typography.sizes.xs,
-            marginTop: 12,
+            fontWeight: '600',
             fontStyle: 'italic',
         },
         cardBottomIndicator: {
             alignItems: 'center',
-            paddingTop: 4,
+            paddingTop: 8,
+            borderTopWidth: 1.5,
+            borderTopColor: colors.borderLight,
         },
         cardStateText: {
-            color: colors.textMuted,
             fontSize: 10,
-            fontWeight: '700',
+            fontWeight: '800',
             letterSpacing: 0.5,
         },
         gradeMatrixContainer: {
-            marginTop: spacing.md,
+            marginTop: 16,
         },
         gradeMatrixLabel: {
-            color: colors.textSubtle,
-            fontSize: 11,
-            fontWeight: '700',
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
+            color: colors.textSecondary,
+            marginBottom: 8,
             textTransform: 'uppercase',
             letterSpacing: 0.5,
-            marginBottom: 6,
-            textAlign: 'center',
         },
         gradeButtonRow: {
             flexDirection: 'row',
-            gap: 6,
-        },
-        sm2Btn: {
-            flex: 1,
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingVertical: 10,
-            borderRadius: radii.md,
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            ...shadows.card,
-        },
-        againBtn: {
-            borderColor: colors.dangerMuted,
-        },
-        hardBtn: {
-            borderColor: colors.warningMuted,
-        },
-        goodBtn: {
-            borderColor: colors.accentBorder,
-        },
-        easyBtn: {
-            borderColor: colors.successMuted,
-        },
-        sm2BtnText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-        },
-        sm2SubText: {
-            color: colors.textSubtle,
-            fontSize: 9,
-            marginTop: 2,
+            gap: 8,
         },
         completionContainer: {
             flex: 1,
+            paddingHorizontal: 20,
             justifyContent: 'center',
-            alignItems: 'center',
-            paddingHorizontal: spacing.lg,
-            paddingBottom: 85,
-        },
-        completionCard: {
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.xl,
-            padding: spacing.xl,
-            alignItems: 'center',
-            width: '100%',
-            ...shadows.card,
         },
         trophyIconBg: {
-            width: 76,
-            height: 76,
-            borderRadius: 38,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
+            width: 72,
+            height: 72,
+            borderRadius: 36,
             alignItems: 'center',
-            marginBottom: spacing.md,
+            justifyContent: 'center',
+            marginBottom: 14,
         },
         completionTitle: {
+            fontSize: typography.sizes.xl,
+            fontWeight: '800',
             color: colors.text,
-            fontSize: typography.sizes.lg,
-            fontWeight: '700',
-            textAlign: 'center',
+            marginBottom: 6,
         },
         completionSub: {
+            fontSize: typography.sizes.sm,
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            lineHeight: 18,
             textAlign: 'center',
-            marginTop: 4,
-            marginBottom: spacing.lg,
+            lineHeight: 20,
+            marginBottom: 20,
         },
         scoreRow: {
             flexDirection: 'row',
             width: '100%',
-            gap: 10,
-            marginBottom: spacing.lg,
+            backgroundColor: colors.surfaceRaised,
+            borderRadius: radii.xl,
+            padding: 14,
+            marginBottom: 20,
+            justifyContent: 'space-around',
         },
         scoreBox: {
-            flex: 1,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: radii.md,
-            paddingVertical: 10,
             alignItems: 'center',
         },
         scoreNum: {
-            fontSize: 20,
+            fontSize: typography.sizes.xl,
             fontWeight: '800',
         },
         scoreLabel: {
+            fontSize: 11,
             color: colors.textMuted,
-            fontSize: 10,
-            fontWeight: '600',
+            fontWeight: '700',
             marginTop: 2,
         },
-        restartBtn: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.accent,
-            width: '100%',
-            paddingVertical: 13,
-            borderRadius: radii.md,
-            marginBottom: 8,
-            ...shadows.glowAccent,
-        },
-        restartBtnText: {
-            color: colors.textInverse,
-            fontSize: typography.sizes.sm,
-            fontWeight: '700',
-        },
-        backToListBtn: {
-            paddingVertical: 10,
-        },
-        backToListText: {
-            color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-        },
         searchSection: {
-            paddingHorizontal: spacing.lg,
-            marginBottom: spacing.xs,
+            paddingHorizontal: 20,
+            marginBottom: 12,
         },
         searchWrapper: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
+            backgroundColor: colors.surface,
+            borderWidth: 2,
             borderColor: colors.border,
-            borderRadius: radii.md,
-            paddingHorizontal: spacing.sm,
-            paddingVertical: 7,
-            marginBottom: spacing.xs,
+            borderRadius: radii.lg,
+            paddingHorizontal: 12,
+            height: 44,
+            marginBottom: 10,
         },
         searchInput: {
             flex: 1,
-            color: colors.text,
             fontSize: typography.sizes.sm,
-            padding: 0,
+            color: colors.text,
+            fontWeight: '600',
         },
         filterChipRow: {
             flexDirection: 'row',
-            gap: 6,
-            marginVertical: 4,
+            gap: 8,
         },
         chip: {
-            paddingVertical: 5,
-            paddingHorizontal: 10,
+            paddingHorizontal: 12,
+            paddingVertical: 6,
             borderRadius: radii.full,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
+            backgroundColor: colors.surface,
+            borderWidth: 1.5,
             borderColor: colors.border,
         },
         chipActive: {
-            backgroundColor: colors.accentMuted,
+            backgroundColor: colors.accent,
             borderColor: colors.accent,
         },
         chipText: {
-            color: colors.textMuted,
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
+            color: colors.textMuted,
         },
         chipTextActive: {
-            color: colors.accent,
-            fontWeight: '700',
-        },
-        skeletonContainer: {
-            paddingHorizontal: spacing.lg,
+            color: colors.textInverse,
+            fontWeight: '800',
         },
         listContent: {
-            paddingHorizontal: spacing.lg,
-            paddingBottom: 95,
-        },
-        card: {
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: spacing.md,
-            borderRadius: radii.lg,
-            marginBottom: spacing.sm,
-            ...shadows.card,
+            paddingHorizontal: 20,
+            paddingBottom: 110,
+            gap: 10,
         },
         cardHeader: {
             flexDirection: 'row',
             justifyContent: 'space-between',
-            alignItems: 'flex-start',
-            marginBottom: spacing.xs,
+            alignItems: 'center',
+            marginBottom: 8,
         },
         termRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            flexWrap: 'wrap',
-            gap: 6,
+            gap: 8,
         },
         term: {
-            color: colors.accent,
-            fontSize: typography.sizes.base,
-            fontWeight: '700',
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
+            color: colors.text,
         },
         posBadge: {
-            backgroundColor: colors.surfaceSubtle,
-            paddingHorizontal: 6,
+            paddingHorizontal: 8,
             paddingVertical: 2,
             borderRadius: radii.xs,
         },
         posBadgeText: {
-            color: colors.textSubtle,
-            fontSize: 9,
+            fontSize: 10,
             fontWeight: '800',
             textTransform: 'uppercase',
         },
         cardActions: {
             flexDirection: 'row',
-            alignItems: 'center',
             gap: 6,
         },
         actionIconBtn: {
-            backgroundColor: colors.surfaceSubtle,
-            padding: 7,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
+            padding: 6,
+            borderRadius: radii.md,
+            backgroundColor: colors.surfaceRaised,
         },
         definition: {
-            color: colors.textSecondary,
-            lineHeight: 20,
             fontSize: typography.sizes.sm,
-            marginTop: 2,
+            color: colors.textSecondary,
+            lineHeight: 22,
+            fontWeight: '500',
         },
         translationBox: {
-            marginTop: spacing.sm,
-            padding: spacing.sm,
-            backgroundColor: colors.surfaceSubtle,
+            marginTop: 10,
+            padding: 10,
+            backgroundColor: colors.blueMuted,
             borderRadius: radii.md,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.indigo,
         },
         translationHeader: {
             flexDirection: 'row',
             alignItems: 'center',
-            marginBottom: 3,
+            gap: 4,
+            marginBottom: 2,
         },
         translationLabel: {
-            color: colors.indigo,
             fontSize: 10,
-            fontWeight: '700',
+            fontWeight: '800',
             textTransform: 'uppercase',
-            marginLeft: 4,
         },
         translationText: {
-            color: colors.textSecondary,
-            fontStyle: 'italic',
             fontSize: typography.sizes.xs,
+            color: colors.text,
+            fontWeight: '600',
+        },
+        skeletonContainer: {
+            paddingHorizontal: 20,
+            gap: 10,
         },
     });
 

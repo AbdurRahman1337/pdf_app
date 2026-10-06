@@ -19,6 +19,8 @@ import VocabularyScreen from './src/features/vocabulary/presentation/VocabularyS
 import QuizScreen from './src/features/quizzes/presentation/QuizScreen';
 import ChatScreen from './src/features/rag-chat/presentation/ChatScreen';
 
+import SplashScreen from './src/core/components/SplashScreen';
+
 export type ScreenRoute = {
     name: 'library' | 'courses' | 'test' | 'tutor' | 'summary' | 'vocabulary' | 'quizzes';
     params?: any;
@@ -29,6 +31,7 @@ function MainApp() {
 
     // Auth State: null = initializing, user = signed in, false = signed out
     const [user, setUser] = useState<AuthUser | null | false>(null);
+    const [isAppReady, setIsAppReady] = useState(false);
 
     // Active Bottom Tab (for tab bar highlight)
     const [activeTab, setActiveTab] = useState<TabKey>('library');
@@ -37,10 +40,19 @@ function MainApp() {
     const [navStack, setNavStack] = useState<ScreenRoute[]>([{ name: 'library', params: {} }]);
 
     useEffect(() => {
+        // Minimum splash display duration for smooth buffering UX
+        const timer = setTimeout(() => {
+            setIsAppReady(true);
+        }, 1000);
+
         const unsubscribe = authService.onAuthStateChanged((activeUser) => {
             setUser(activeUser ?? false);
         });
-        return unsubscribe;
+
+        return () => {
+            clearTimeout(timer);
+            unsubscribe();
+        };
     }, []);
 
     const currentScreen = navStack[navStack.length - 1] || { name: 'library', params: {} };
@@ -122,13 +134,8 @@ function MainApp() {
         },
     };
 
-    if (user === null) {
-        return (
-            <View style={{ flex: 1, backgroundColor: colors.bg, justifyContent: 'center', alignItems: 'center' }}>
-                <StatusBar style={isDark ? 'light' : 'dark'} />
-                <ActivityIndicator size="large" color={colors.accent} />
-            </View>
-        );
+    if (user === null || !isAppReady) {
+        return <SplashScreen message="Loading Lecta AI..." />;
     }
 
     if (!user) {

@@ -31,7 +31,7 @@ import {
     Layers,
     Sliders,
 } from 'lucide-react-native';
-import { useTheme, ThemeMode } from '../theme/ThemeContext';
+import { useTheme, ThemeMode, useSafeTopGap } from '../theme/ThemeContext';
 import authService from '../auth/authService';
 
 const BUTTON_SIZE = 54;
@@ -40,6 +40,7 @@ const STORAGE_POS_Y = '@pdf_app_floating_pos_y';
 
 export const FloatingSettings: React.FC = () => {
     const { themeMode, setThemeMode, isDark, colors, shadows, typography, radii, spacing } = useTheme();
+    const topGap = useSafeTopGap();
     const { width: screenWidth, height: screenHeight } = useWindowDimensions();
 
     const [modalVisible, setModalVisible] = useState(false);
@@ -48,7 +49,7 @@ export const FloatingSettings: React.FC = () => {
     // Safe bounds
     const minX = 12;
     const maxX = Math.max(minX, screenWidth - BUTTON_SIZE - 12);
-    const minY = 48; // Below status bar
+    const minY = Math.max(topGap, 48); // Below status bar
     const maxY = Math.max(minY, screenHeight - BUTTON_SIZE - 36);
 
     const defaultX = screenWidth - BUTTON_SIZE - 20;
@@ -492,7 +493,7 @@ export const FloatingSettings: React.FC = () => {
                             {/* Footer App Info */}
                             <View style={styles.footerNote}>
                                 <Text style={[styles.footerText, { color: colors.textSubtle }]}>
-                                    PDF AI Study Hub • v1.0.0
+                                    Lecta AI • v1.0.0
                                 </Text>
                             </View>
                         </ScrollView>

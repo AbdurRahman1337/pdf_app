@@ -240,7 +240,7 @@ export default function App() {
             />
           </div>
           <div>
-            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.02em' }}>AI Study Assistant</h1>
+            <h1 style={{ fontSize: '1.25rem', fontWeight: 700, letterSpacing: '-0.02em' }}>Lecta AI</h1>
             <p style={{ fontSize: '0.8rem', color: 'var(--text-secondary)' }}>Full-Stack RAG System &bull; Semantic Notes &amp; Adaptive Quizzes</p>
           </div>
         </div>

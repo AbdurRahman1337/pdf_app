@@ -31,16 +31,16 @@ def extract_json_block(raw_text: str) -> str:
     if fence_match:
         text = fence_match.group(1).strip()
 
-    # Find boundaries of JSON object { ... } or array [ ... ]
+    # Find boundaries of JSON object { ... } or array [ ... ] depending on which appears first
     first_brace = text.find("{")
     last_brace = text.rfind("}")
-    if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
+    first_bracket = text.find("[")
+    last_bracket = text.rfind("]")
+
+    if first_bracket != -1 and (first_brace == -1 or first_bracket < first_brace) and last_bracket != -1 and last_bracket > first_bracket:
+        text = text[first_bracket : last_bracket + 1]
+    elif first_brace != -1 and last_brace != -1 and last_brace > first_brace:
         text = text[first_brace : last_brace + 1]
-    else:
-        first_bracket = text.find("[")
-        last_bracket = text.rfind("]")
-        if first_bracket != -1 and last_bracket != -1 and last_bracket > first_bracket:
-            text = text[first_bracket : last_bracket + 1]
 
     # Clean trailing commas before closing braces/brackets: [1, 2, ] -> [1, 2]
     text = re.sub(r",\s*([\]}])", r"\1", text)
@@ -159,27 +159,9 @@ async def generate_quiz(
             response_obj = parse_and_validate_quiz(retry_cleaned, payload.topic, session_id)
         except Exception as retry_err:
             logger.error(f"Strict retry also failed quiz validation: {retry_err}")
-            # Fallback: create emergency formatted questions based on topic
-            fallback_questions = [
-                QuizQuestion(
-                    id=i,
-                    question=f"Key concept question {i} regarding {payload.topic}",
-                    options=[
-                        f"Primary documented definition of {payload.topic}",
-                        "Secondary contradictory property",
-                        "Unrelated variable",
-                        "Deprecated convention"
-                    ],
-                    correct_answer=f"Primary documented definition of {payload.topic}",
-                    explanation=f"Based on your course notes, the core definition directly defines {payload.topic}."
-                )
-                for i in range(1, payload.num_questions + 1)
-            ]
-            response_obj = QuizGenerateResponse(
-                topic=payload.topic,
-                questions=fallback_questions,
-                total_questions=len(fallback_questions),
-                session_id=session_id,
+            raise HTTPException(
+                status_code=500,
+                detail=f"Gemini quiz generation failed schema validation: {retry_err}"
             )
 
     # Log quiz generation to books matched by session or context

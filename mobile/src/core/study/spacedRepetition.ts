@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { loadAllSpacedCards, saveSpacedCard } from '../db/database';
 
 export type RecallRating = 'again' | 'hard' | 'good' | 'easy';
 
@@ -88,6 +89,7 @@ export function applySM2(card: SpacedCard, rating: RecallRating): SpacedCard {
     };
 }
 
+
 export function isCardDue(card: SpacedCard): boolean {
     if (!card.nextReviewDate) return true;
     return Date.now() >= card.nextReviewDate;
@@ -123,18 +125,34 @@ export function calculateDeckStats(cards: SpacedCard[]): DeckStats {
 }
 
 export async function loadSpacedCards(pdfId: string, baseTerms: { term: string; definition: string }[]): Promise<SpacedCard[]> {
-    const storageKey = `@spaced_cards_v2_${pdfId}`;
     try {
-        const storedRaw = await AsyncStorage.getItem(storageKey);
-        const storedMap: Record<string, SpacedCard> = storedRaw ? JSON.parse(storedRaw) : {};
+        // 1. Load from SQLite
+        const sqliteCards = await loadAllSpacedCards(pdfId);
+        const storedMap: Record<string, SpacedCard> = {};
+        for (const c of sqliteCards) {
+            storedMap[c.id] = c;
+            storedMap[c.term.toLowerCase()] = c;
+        }
+
+        // 2. If SQLite was empty, check AsyncStorage
+        if (sqliteCards.length === 0) {
+            const storageKey = `@spaced_cards_v2_${pdfId}`;
+            const storedRaw = await AsyncStorage.getItem(storageKey);
+            if (storedRaw) {
+                const asyncMap = JSON.parse(storedRaw);
+                Object.assign(storedMap, asyncMap);
+            }
+        }
 
         return baseTerms.map((b) => {
             const cardId = `${pdfId}_${b.term}`;
-            if (storedMap[cardId]) {
+            const existing = storedMap[cardId] || storedMap[b.term.toLowerCase()];
+            if (existing) {
                 return {
-                    ...storedMap[cardId],
+                    ...existing,
                     term: b.term,
                     definition: b.definition,
+                    pdfId,
                 };
             }
             return {
@@ -149,7 +167,8 @@ export async function loadSpacedCards(pdfId: string, baseTerms: { term: string; 
                 state: 'new',
             };
         });
-    } catch {
+    } catch (e) {
+        console.warn('[SM-2] Failed to load cards from SQLite:', e);
         return baseTerms.map((b) => ({
             id: `${pdfId}_${b.term}`,
             term: b.term,
@@ -165,15 +184,23 @@ export async function loadSpacedCards(pdfId: string, baseTerms: { term: string; 
 }
 
 export async function saveSpacedCards(pdfId: string, cards: SpacedCard[]): Promise<void> {
-    const storageKey = `@spaced_cards_v2_${pdfId}`;
     try {
+        // 1. Save to SQLite
+        for (const card of cards) {
+            await saveSpacedCard({
+                ...card,
+                pdfId,
+            });
+        }
+        // 2. Mirror to AsyncStorage
+        const storageKey = `@spaced_cards_v2_${pdfId}`;
         const cardMap: Record<string, SpacedCard> = {};
         for (const card of cards) {
             cardMap[card.id] = card;
         }
         await AsyncStorage.setItem(storageKey, JSON.stringify(cardMap));
     } catch (e) {
-        console.warn('Failed to persist spaced cards to AsyncStorage:', e);
+        console.warn('[SM-2] Failed to persist spaced cards:', e);
     }
 }
 

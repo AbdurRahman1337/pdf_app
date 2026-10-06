@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, Modal } from 'react-native';
 import { AlertTriangle, Trash2, X } from 'lucide-react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { ThemeColors, radii, typography } from '../theme/tokens';
+import TactileButton from './TactileButton';
 
 export interface ConfirmDialogProps {
     visible: boolean;
@@ -40,7 +41,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             onRequestClose={onCancel}
         >
             <View style={styles.overlay}>
-                <View style={[styles.dialogCard, shadows.modal]}>
+                <View style={[styles.dialogCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                     <View style={styles.header}>
                         <View
                             style={[
@@ -53,9 +54,9 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                             ]}
                         >
                             {isDestructive ? (
-                                <Trash2 size={20} color={colors.danger} strokeWidth={1.5} />
+                                <Trash2 size={22} color={colors.danger} strokeWidth={2} />
                             ) : (
-                                <AlertTriangle size={20} color={colors.accent} strokeWidth={1.5} />
+                                <AlertTriangle size={22} color={colors.accent} strokeWidth={2} />
                             )}
                         </View>
                         <TouchableOpacity
@@ -63,7 +64,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                             style={styles.closeBtn}
                             accessibilityLabel="Close dialog"
                         >
-                            <X size={18} color={colors.textMuted} />
+                            <X size={20} color={colors.textMuted} />
                         </TouchableOpacity>
                     </View>
 
@@ -74,7 +75,7 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                     </Text>
 
                     {itemName ? (
-                        <View style={styles.itemBadge}>
+                        <View style={[styles.itemBadge, { backgroundColor: colors.surfaceRaised }]}>
                             <Text style={styles.itemName} numberOfLines={1}>
                                 "{itemName}"
                             </Text>
@@ -82,33 +83,25 @@ export const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
                     ) : null}
 
                     <View style={styles.buttonRow}>
-                        <TouchableOpacity
-                            style={[styles.btn, styles.cancelBtn]}
-                            onPress={onCancel}
-                            activeOpacity={0.7}
-                            accessibilityRole="button"
-                        >
-                            <Text style={styles.cancelText}>{cancelText}</Text>
-                        </TouchableOpacity>
+                        <View style={{ flex: 1 }}>
+                            <TactileButton
+                                title={cancelText}
+                                onPress={onCancel}
+                                variant="secondary"
+                                size="md"
+                                fullWidth
+                            />
+                        </View>
 
-                        <TouchableOpacity
-                            style={[
-                                styles.btn,
-                                isDestructive ? styles.destructiveBtn : styles.confirmBtn,
-                            ]}
-                            onPress={onConfirm}
-                            activeOpacity={0.8}
-                            accessibilityRole="button"
-                        >
-                            <Text
-                                style={[
-                                    styles.confirmText,
-                                    { color: colors.textInverse },
-                                ]}
-                            >
-                                {confirmText}
-                            </Text>
-                        </TouchableOpacity>
+                        <View style={{ flex: 1 }}>
+                            <TactileButton
+                                title={confirmText}
+                                onPress={onConfirm}
+                                variant={isDestructive ? 'danger' : 'primary'}
+                                size="md"
+                                fullWidth
+                            />
+                        </View>
                     </View>
                 </View>
             </View>
@@ -123,93 +116,65 @@ const createStyles = (colors: ThemeColors) =>
             backgroundColor: colors.overlay,
             justifyContent: 'center',
             alignItems: 'center',
-            padding: 24,
+            padding: 20,
         },
         dialogCard: {
             width: '100%',
-            maxWidth: 380,
-            backgroundColor: colors.surface,
-            borderRadius: radii.xl,
-            borderWidth: 1,
-            borderColor: colors.border,
+            maxWidth: 340,
+            borderRadius: radii.xxl,
+            borderWidth: 2,
             padding: 20,
+            shadowColor: '#0F172A',
+            shadowOffset: { width: 0, height: 8 },
+            shadowOpacity: 0.15,
+            shadowRadius: 20,
+            elevation: 8,
         },
         header: {
             flexDirection: 'row',
             justifyContent: 'space-between',
             alignItems: 'center',
-            marginBottom: 14,
+            marginBottom: 12,
         },
         iconContainer: {
-            width: 40,
-            height: 40,
-            borderRadius: 20,
+            width: 44,
+            height: 44,
+            borderRadius: 22,
             alignItems: 'center',
             justifyContent: 'center',
         },
         closeBtn: {
-            padding: 6,
+            padding: 4,
         },
         title: {
             fontSize: typography.sizes.lg,
-            fontWeight: '600',
+            fontWeight: '800',
             color: colors.text,
-            marginBottom: 8,
+            marginBottom: 6,
         },
         message: {
             fontSize: typography.sizes.sm,
-            color: colors.textMuted,
+            color: colors.textSecondary,
             lineHeight: 20,
-            marginBottom: 12,
+            marginBottom: 14,
+            fontWeight: '500',
         },
         itemBadge: {
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 8,
-            paddingHorizontal: 12,
+            paddingVertical: 6,
+            paddingHorizontal: 10,
             borderRadius: radii.sm,
-            marginBottom: 20,
-            borderWidth: 1,
-            borderColor: colors.border,
+            marginBottom: 16,
         },
         itemName: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '500',
+            fontSize: typography.sizes.xs,
+            fontWeight: '700',
             color: colors.text,
         },
         buttonRow: {
             flexDirection: 'row',
             gap: 10,
-            justifyContent: 'flex-end',
-        },
-        btn: {
-            paddingVertical: 10,
-            paddingHorizontal: 16,
-            borderRadius: radii.sm,
-            minHeight: 44,
-            justifyContent: 'center',
-            alignItems: 'center',
-        },
-        cancelBtn: {
-            backgroundColor: colors.surfaceRaised,
-            borderWidth: 1,
-            borderColor: colors.border,
-        },
-        cancelText: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '500',
-            color: colors.textSecondary,
-        },
-        confirmBtn: {
-            backgroundColor: colors.accent,
-        },
-        destructiveBtn: {
-            backgroundColor: colors.danger,
-        },
-        confirmText: {
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            marginTop: 4,
         },
     });
 
 export default ConfirmDialog;
-

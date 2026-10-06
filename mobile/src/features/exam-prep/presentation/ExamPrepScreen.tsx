@@ -39,7 +39,15 @@ import {
     ChevronDown,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
-import { useTheme } from '../../../core/theme/ThemeContext';
+import {
+    saveExamRecord,
+    loadExamHistory,
+    saveExamAutosave,
+    loadExamAutosave,
+    clearExamAutosave,
+    loadCoursesHierarchy,
+} from '../../../core/db/database';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
 import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import EmptyState from '../../../core/components/EmptyState';
 import ConfirmDialog from '../../../core/components/ConfirmDialog';
@@ -76,7 +84,8 @@ const HISTORY_STORAGE_KEY = '@pdf_app_test_history_v3';
 const ExamPrepScreen = ({ route, navigation }: any) => {
     const routeParams = route?.params || {};
     const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     // Step state: 'landing' | 'setup' | 'testing' | 'results'
     const [wizardStep, setWizardStep] = useState<'landing' | 'setup' | 'testing' | 'results'>('landing');
@@ -122,14 +131,20 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
 
     const loadDataAndCheckAutosave = async () => {
         try {
-            // Load courses
-            const coursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
+            // 1. Load courses from SQLite
+            const sqliteCourses = await loadCoursesHierarchy();
             let loadedCourses = [DEFAULT_INITIAL_COURSE];
-            if (coursesRaw) {
-                const parsed = JSON.parse(coursesRaw);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    loadedCourses = parsed;
-                    setCourses(parsed);
+            if (Array.isArray(sqliteCourses) && sqliteCourses.length > 0) {
+                loadedCourses = sqliteCourses;
+                setCourses(sqliteCourses);
+            } else {
+                const coursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
+                if (coursesRaw) {
+                    const parsed = JSON.parse(coursesRaw);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        loadedCourses = parsed;
+                        setCourses(parsed);
+                    }
                 }
             }
 
@@ -147,27 +162,43 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
             });
             setSelectedSubjectIds(subMap);
 
-            // Load history
-            const histRaw = await AsyncStorage.getItem(HISTORY_STORAGE_KEY);
-            if (histRaw) {
-                const parsedHist = JSON.parse(histRaw);
-                if (Array.isArray(parsedHist)) {
-                    setHistory(parsedHist);
+            // 2. Load history from SQLite
+            const sqliteHistory = await loadExamHistory();
+            if (Array.isArray(sqliteHistory) && sqliteHistory.length > 0) {
+                setHistory(sqliteHistory);
+            } else {
+                const histRaw = await AsyncStorage.getItem(HISTORY_STORAGE_KEY);
+                if (histRaw) {
+                    const parsedHist = JSON.parse(histRaw);
+                    if (Array.isArray(parsedHist)) {
+                        setHistory(parsedHist);
+                    }
                 }
             }
 
-            // Check autosave
-            const autoSaveRaw = await AsyncStorage.getItem(AUTOSAVE_STORAGE_KEY);
-            if (autoSaveRaw) {
-                const auto = JSON.parse(autoSaveRaw);
-                if (auto && Array.isArray(auto.testQuestions) && auto.testQuestions.length > 0 && !auto.submitted) {
-                    setTestQuestions(auto.testQuestions);
-                    setUserAnswers(auto.userAnswers || {});
-                    setFlaggedQuestions(auto.flaggedQuestions || {});
-                    setCurrentQIndex(auto.currentQIndex || 0);
-                    setTimeLeftSeconds(auto.timeLeftSeconds || 300);
-                    setWizardStep('testing');
-                    startTimer(auto.timeLeftSeconds || 300);
+            // 3. Check autosave from SQLite
+            const auto = await loadExamAutosave();
+            if (auto && Array.isArray(auto.testQuestions) && auto.testQuestions.length > 0 && !auto.submitted) {
+                setTestQuestions(auto.testQuestions);
+                setUserAnswers(auto.userAnswers || {});
+                setFlaggedQuestions(auto.flaggedQuestions || {});
+                setCurrentQIndex(auto.currentQIndex || 0);
+                setTimeLeftSeconds(auto.timeLeftSeconds || 300);
+                setWizardStep('testing');
+                startTimer(auto.timeLeftSeconds || 300);
+            } else {
+                const autoSaveRaw = await AsyncStorage.getItem(AUTOSAVE_STORAGE_KEY);
+                if (autoSaveRaw) {
+                    const parsedAuto = JSON.parse(autoSaveRaw);
+                    if (parsedAuto && Array.isArray(parsedAuto.testQuestions) && parsedAuto.testQuestions.length > 0 && !parsedAuto.submitted) {
+                        setTestQuestions(parsedAuto.testQuestions);
+                        setUserAnswers(parsedAuto.userAnswers || {});
+                        setFlaggedQuestions(parsedAuto.flaggedQuestions || {});
+                        setCurrentQIndex(parsedAuto.currentQIndex || 0);
+                        setTimeLeftSeconds(parsedAuto.timeLeftSeconds || 300);
+                        setWizardStep('testing');
+                        startTimer(parsedAuto.timeLeftSeconds || 300);
+                    }
                 }
             }
         } catch (e) {
@@ -184,17 +215,16 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         tLeft: number
     ) => {
         try {
-            await AsyncStorage.setItem(
-                AUTOSAVE_STORAGE_KEY,
-                JSON.stringify({
-                    testQuestions: qs,
-                    userAnswers: ans,
-                    flaggedQuestions: flags,
-                    currentQIndex: idx,
-                    timeLeftSeconds: tLeft,
-                    submitted: false,
-                })
-            );
+            const state = {
+                testQuestions: qs,
+                userAnswers: ans,
+                flaggedQuestions: flags,
+                currentQIndex: idx,
+                timeLeftSeconds: tLeft,
+                submitted: false,
+            };
+            await saveExamAutosave(state);
+            await AsyncStorage.setItem(AUTOSAVE_STORAGE_KEY, JSON.stringify(state));
         } catch (e) {
             console.warn('Autosave notice:', e);
         }
@@ -436,6 +466,8 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
         const updatedHist = [record, ...history];
         setHistory(updatedHist);
         try {
+            await saveExamRecord(record);
+            await clearExamAutosave();
             await AsyncStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(updatedHist));
             await AsyncStorage.removeItem(AUTOSAVE_STORAGE_KEY);
         } catch (e) {
@@ -1143,14 +1175,14 @@ const ExamPrepScreen = ({ route, navigation }: any) => {
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
         },
         landingTopBar: {
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             marginBottom: 16,
         },
         landingTitle: {
@@ -1267,7 +1299,7 @@ const createStyles = (colors: ThemeColors) =>
         wizardHeader: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             marginBottom: 16,
             gap: 12,
         },
@@ -1419,7 +1451,7 @@ const createStyles = (colors: ThemeColors) =>
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             paddingBottom: 10,
             paddingHorizontal: 16,
             backgroundColor: colors.surface,
@@ -1537,7 +1569,7 @@ const createStyles = (colors: ThemeColors) =>
             fontSize: 22,
             fontWeight: '700',
             color: colors.text,
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             marginBottom: 12,
         },
         scoreHeroCard: {

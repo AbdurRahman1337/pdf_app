@@ -14,6 +14,7 @@ from app.api.routes_quiz import router as quiz_router
 from app.api.routes_mobile_compat import router as mobile_compat_router
 from app.api.routes_exam_prep import router as exam_prep_router
 from app.api.routes_courses import router as courses_router
+from app.api.routes_auth import router as auth_router
 
 app = FastAPI(
     title=settings.PROJECT_NAME,
@@ -41,6 +42,7 @@ register_error_handlers(app)
 
 # 4. Include Core API Routers
 app.include_router(health_router)
+app.include_router(auth_router)
 app.include_router(upload_router)
 app.include_router(chat_router)
 app.include_router(quiz_router)
@@ -50,6 +52,7 @@ app.include_router(courses_router)
 
 # Also expose under /api and /api/v1 prefixes for standard client setups & mobile
 app.include_router(health_router, prefix="/api")
+app.include_router(auth_router, prefix="/api")
 app.include_router(upload_router, prefix="/api")
 app.include_router(chat_router, prefix="/api")
 app.include_router(quiz_router, prefix="/api")
@@ -58,6 +61,7 @@ app.include_router(exam_prep_router, prefix="/api")
 app.include_router(courses_router, prefix="/api")
 
 app.include_router(health_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(upload_router, prefix="/api/v1")
 app.include_router(chat_router, prefix="/api/v1")
 app.include_router(quiz_router, prefix="/api/v1")

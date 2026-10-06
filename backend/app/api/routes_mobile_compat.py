@@ -3,9 +3,10 @@ import re
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Header
 from pydantic import BaseModel, Field
 
+import logging
 from app.config import settings
 from app.dependencies import get_session_id
 from app.db.vector_store import vector_store
@@ -14,10 +15,11 @@ from app.core.chunking import get_token_chunks
 from app.utils.file_parser import extract_text_from_file
 from app.core.llm_client import llm_client
 from app.core.rag_pipeline import run_rag_pipeline
+from app.db.google_drive_service import google_drive_service
+
+logger = logging.getLogger("ai_study_assistant.mobile_compat")
 
 router = APIRouter(tags=["Mobile App Compatibility API"])
-
-from app.db.google_drive_service import google_drive_service
 
 # Cache for generated summaries and vocabulary to avoid repeated LLM calls
 _ANALYSIS_CACHE: Dict[str, Dict[str, Any]] = {}
@@ -195,6 +197,7 @@ async def list_mobile_pdfs(session_id: str = Depends(get_session_id)):
 async def upload_mobile_pdf(
     file: UploadFile = File(...),
     session_id: str = Depends(get_session_id),
+    google_access_token: Optional[str] = Header(default=None, alias="X-Google-Access-Token"),
 ):
     """
     Ingests and indexes PDF from Mobile DashboardScreen, uploading to Google Drive and persisting to Firestore.
@@ -208,11 +211,16 @@ async def upload_mobile_pdf(
 
     # 1. Upload raw file to Google Drive
     mime_type = file.content_type or ("text/plain" if filename.endswith((".txt", ".md")) else "application/pdf")
-    drive_result = google_drive_service.upload_file(
-        filename=filename,
-        file_bytes=content_bytes,
-        mime_type=mime_type
-    )
+    try:
+        drive_result = google_drive_service.upload_file(
+            filename=filename,
+            file_bytes=content_bytes,
+            mime_type=mime_type,
+            user_access_token=google_access_token
+        )
+    except Exception as drive_err:
+        logger.warning(f"Google Drive upload warning: {drive_err}")
+        drive_result = {"drive_file_id": None, "drive_web_view_link": None}
 
     doc_id = str(uuid.uuid4())
     uploaded_at = datetime.now(timezone.utc).isoformat()
@@ -404,20 +412,7 @@ async def get_mobile_pdf_details(pdf_id: str):
             if v.get("term")
         ]
 
-        # Enrich with any difficult terms from summary_brief & main_points
-        enriched_terms = llm_client._extract_all_difficult_vocabulary(
-            summary_text=brief_text,
-            main_points_text=points_text,
-            excerpt_text=sample_text,
-            clean_fn=clean_fn
-        )
-        merged_vocab = {v.term.lower(): v for v in vocab_items}
-        for ev in enriched_terms:
-            t_key = ev["term"].lower()
-            if t_key not in merged_vocab:
-                merged_vocab[t_key] = MobileVocabItem(term=ev["term"], definition=ev["definition"])
-
-        final_vocab_list = list(merged_vocab.values())
+        final_vocab_list = vocab_items
 
         result = MobilePDFDetailResponse(
             id=pdf_id,
@@ -448,41 +443,11 @@ async def get_mobile_pdf_details(pdf_id: str):
         return result
 
     except Exception as exc:
-        # Guaranteed rich extraction fallback with 100% summary difficulty coverage
-        offline_json = llm_client._generate_offline_summary_and_vocab(full_prompt)
-        try:
-            fallback_data = json.loads(offline_json)
-            vocab_items = [
-                MobileVocabItem(term=v.get("term", ""), definition=v.get("definition", ""))
-                for v in fallback_data.get("vocabulary", [])
-                if v.get("term")
-            ]
-            fallback_result = MobilePDFDetailResponse(
-                id=pdf_id,
-                original_name=filename,
-                process_status="COMPLETED",
-                summary_brief=fallback_data.get("summary_brief", f"Key materials extracted from {filename}."),
-                summary_details=MobileSummaryDetails(
-                    main_points=fallback_data.get("main_points", "• Detailed analysis completed.")
-                ),
-                vocabulary=vocab_items
-            )
-            _ANALYSIS_CACHE[pdf_id] = fallback_result
-            return fallback_result
-        except Exception:
-            return MobilePDFDetailResponse(
-                id=pdf_id,
-                original_name=filename,
-                process_status="COMPLETED",
-                summary_brief=f"Key materials extracted from {filename}.",
-                summary_details=MobileSummaryDetails(
-                    main_points="• Core themes indexed in vector store.\n• Ready for interactive RAG querying."
-                ),
-                vocabulary=[
-                    MobileVocabItem(term="Knowledge Base", definition="A vector-indexed repository of document facts and concepts."),
-                    MobileVocabItem(term="RAG", definition="Retrieval-Augmented Generation connecting LLMs with reference material.")
-                ]
-            )
+        logger.error(f"Gemini summary and vocabulary generation failed: {exc}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gemini API analysis failed: {exc}"
+        )
 
 
 # ── AI Endpoints ──────────────────────────────────────────────────────────────
@@ -567,8 +532,9 @@ async def translate_mobile_text(payload: MobileTranslateRequest):
         )
         return MobileTranslateResponse(translated_text=translated.strip())
     except Exception as exc:
-        return MobileTranslateResponse(
-            translated_text=f"[Translation unavailable]: {payload.text}"
+        raise HTTPException(
+            status_code=500,
+            detail=f"Gemini translation failed: {exc}"
         )
 
 
@@ -592,14 +558,12 @@ async def socratic_tutor_mode(
             doc_context = "\n\n".join([c["text"] for c in chunks[:8]])[:8000]
 
     if not doc_context:
-        # Fallback to similar chunks via query
         query_text = payload.concept_or_topic or "essential concepts"
         retrieved = vector_store.query_similar(query_text, session_id=session_id, n_results=4)
         if retrieved:
             doc_context = "\n\n".join([r.get("text") or r.get("content", "") for r in retrieved])[:8000]
 
     if not payload.student_explanation or len(payload.student_explanation.strip()) < 5:
-        # Generate initial challenge question
         system_prompt = (
             "You are a master Socratic professor practicing the Feynman Technique.\n"
             "Formulate a thought-provoking challenge question for the student based on their study material.\n"
@@ -620,13 +584,8 @@ async def socratic_tutor_mode(
                 tutor_feedback=data.get("tutor_feedback", "Explain this concept in plain terms without relying on jargon."),
                 comprehension_score=None
             )
-        except Exception:
-            return MobileSocraticResponse(
-                mode="challenge",
-                challenge_question=f"Explain how the fundamental mechanisms of {target_topic} operate in practical scenarios.",
-                tutor_feedback="Teach this concept in your own words to test your active recall.",
-                comprehension_score=None
-            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Gemini Socratic challenge generation failed: {e}")
 
     # Evaluate student's typed explanation
     eval_prompt = (
@@ -670,16 +629,7 @@ async def socratic_tutor_mode(
             follow_up_challenge=data.get("follow_up_challenge")
         )
     except Exception as e:
-        return MobileSocraticResponse(
-            mode="evaluation",
-            challenge_question=f"Concept: {target_topic}",
-            comprehension_score=75,
-            strengths=["Demonstrated good general comprehension of the subject."],
-            missing_aspects=["Review specific formulas and operational definitions in the notes."],
-            misconceptions=[],
-            tutor_feedback="Your explanation captures the general gist. Focus on the exact technical parameters for full mastery.",
-            follow_up_challenge=f"How does {target_topic} handle edge-case failures?"
-        )
+        raise HTTPException(status_code=500, detail=f"Gemini Socratic evaluation failed: {e}")
 
 
 @router.get("/pdf/{pdf_id}/cheat-sheet", response_model=MobileCheatSheetResponse)
@@ -759,21 +709,8 @@ async def get_document_cheat_sheet(pdf_id: str):
             exam_traps_and_pitfalls=traps,
             markdown_view=md
         )
-    except Exception:
-        return MobileCheatSheetResponse(
-            pdf_id=pdf_id,
-            title=filename,
-            formulas_and_theorems=[
-                MobileCheatSheetItem(name="Core Principle", formula_or_rule="Concept Definition", explanation="Primary documented law in lecture notes.")
-            ],
-            key_acronyms=[
-                MobileVocabItem(term="RAG", definition="Retrieval-Augmented Generation")
-            ],
-            exam_traps_and_pitfalls=[
-                "Ensure correct unit conversions and review edge-case boundary conditions."
-            ],
-            markdown_view=f"# 📌 {filename} Cheat Sheet\n\n- **Core Principle**: Key documented relationship."
-        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini cheat sheet generation failed: {e}")
 
 
 @router.get("/pdf/{pdf_id}/podcast", response_model=MobilePodcastResponse)
@@ -829,17 +766,5 @@ async def get_document_podcast_dialogue(pdf_id: str):
             dialogue=dialogue,
             full_script=full_script
         )
-    except Exception:
-        fallback_dialogue = [
-            MobilePodcastLine(speaker="Alex", line=f"Welcome to today's study breakdown of {filename}! What should we focus on first?"),
-            MobilePodcastLine(speaker="Jordan", line="The most essential point is understanding the core architectural mechanism and how each layer coordinates data."),
-            MobilePodcastLine(speaker="Alex", line="That makes sense! And for the exam, what is the biggest trap students fall into?"),
-            MobilePodcastLine(speaker="Jordan", line="Always watch out for edge cases and remember to review the primary definitions before test day!")
-        ]
-        return MobilePodcastResponse(
-            pdf_id=pdf_id,
-            title=f"Study Audio Overview: {filename}",
-            duration_estimate="2 min listen",
-            dialogue=fallback_dialogue,
-            full_script="\n\n".join([f"{d.speaker}: {d.line}" for d in fallback_dialogue])
-        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Gemini podcast script generation failed: {e}")

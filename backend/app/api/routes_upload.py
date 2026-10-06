@@ -1,7 +1,8 @@
 import uuid
+import logging
 from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, Header
 
 from app.db.models import UploadResponse, DocumentListResponse, DocumentInfo
 from app.db.vector_store import vector_store
@@ -10,8 +11,8 @@ from app.db.google_drive_service import google_drive_service
 from app.core.chunking import get_token_chunks
 from app.utils.file_parser import extract_text_from_file
 from app.dependencies import get_session_id
-from fastapi import Header
 
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["Documents & Ingestion"])
 MAX_FILE_SIZE_BYTES = 25 * 1024 * 1024  # 25 MB
 
@@ -41,12 +42,16 @@ async def upload_document(
 
     # 1. Upload raw file to Google Drive (Storage)
     mime_type = file.content_type or ("text/plain" if filename.endswith((".txt", ".md")) else "application/pdf")
-    drive_result = google_drive_service.upload_file(
-        filename=filename,
-        file_bytes=content_bytes,
-        mime_type=mime_type,
-        user_access_token=google_access_token
-    )
+    try:
+        drive_result = google_drive_service.upload_file(
+            filename=filename,
+            file_bytes=content_bytes,
+            mime_type=mime_type,
+            user_access_token=google_access_token
+        )
+    except Exception as drive_err:
+        logger.warning(f"Google Drive upload warning: {drive_err}")
+        drive_result = {"drive_file_id": None, "drive_web_view_link": None}
 
     doc_id = str(uuid.uuid4())
     uploaded_at = datetime.now(timezone.utc).isoformat()

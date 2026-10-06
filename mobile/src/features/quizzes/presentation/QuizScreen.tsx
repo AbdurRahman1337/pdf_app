@@ -8,6 +8,7 @@ import {
     StyleSheet,
     TextInput,
     Alert,
+    Platform,
 } from 'react-native';
 import {
     ChevronLeft,
@@ -22,14 +23,22 @@ import {
     BookOpen,
     HelpCircle,
     ArrowRight,
+    ArrowLeft,
     Flame,
     FileText,
+    X,
+    Check,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
-import { useTheme } from '../../../core/theme/ThemeContext';
-import { ThemeColors, typography, radii, spacing, darkShadows } from '../../../core/theme/tokens';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
+import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import SegmentedControl from '../../../core/components/SegmentedControl';
 import EmptyState from '../../../core/components/EmptyState';
+import ConfirmDialog from '../../../core/components/ConfirmDialog';
+import TactileButton from '../../../core/components/TactileButton';
+import TactileCard from '../../../core/components/TactileCard';
+import TactileProgressBar from '../../../core/components/TactileProgressBar';
+import QuizFeedbackSheet from '../../../core/components/QuizFeedbackSheet';
 
 interface QuizQuestion {
     id: number;
@@ -53,8 +62,9 @@ const QuizScreen = ({ route, navigation }: any) => {
     const pdfId = routeParams.pdfId;
     const initialTitle = routeParams.title ? formatTitle(routeParams.title) : '';
 
-    const { colors, shadows } = useTheme();
-    const styles = useMemo(() => createStyles(colors, shadows), [colors, shadows]);
+    const { colors, shadows, isDark } = useTheme();
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     // Available documents for selector
     const [docs, setDocs] = useState<any[]>([]);
@@ -68,13 +78,16 @@ const QuizScreen = ({ route, navigation }: any) => {
     const [quizData, setQuizData] = useState<QuizQuestion[] | null>(null);
     const [activeTopic, setActiveTopic] = useState<string>('');
 
-    // Quiz Session State
+    // Active Quiz Session State
     const [currentQIndex, setCurrentQIndex] = useState(0);
+    const [selectedOption, setSelectedOption] = useState<string | null>(null);
     const [userAnswers, setUserAnswers] = useState<Record<number, string>>({});
+    const [isFeedbackOpen, setIsFeedbackOpen] = useState(false);
     const [submitted, setSubmitted] = useState(false);
+    const [isQuitConfirmOpen, setIsQuitConfirmOpen] = useState(false);
 
     // Timed Mock Exam State
-    const [timeLeft, setTimeLeft] = useState<number>(300); // 5 mins in seconds
+    const [timeLeft, setTimeLeft] = useState<number>(300);
     const timerRef = useRef<any>(null);
 
     useEffect(() => {
@@ -99,7 +112,7 @@ const QuizScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Timer handler for Mock Exam Mode
+    // Timer for Mock Exam Mode
     useEffect(() => {
         if (quizData && examMode === 'mock' && !submitted) {
             timerRef.current = setInterval(() => {
@@ -128,10 +141,12 @@ const QuizScreen = ({ route, navigation }: any) => {
         setGenerating(true);
         setQuizData(null);
         setUserAnswers({});
+        setSelectedOption(null);
         setCurrentQIndex(0);
         setSubmitted(false);
+        setIsFeedbackOpen(false);
         setActiveTopic(effectiveTopic);
-        setTimeLeft(numQuestions * 60); // 1 minute per question in mock mode
+        setTimeLeft(numQuestions * 60);
 
         try {
             const response = await apiClient.post('/quiz/generate', {
@@ -155,14 +170,41 @@ const QuizScreen = ({ route, navigation }: any) => {
         }
     };
 
-    const handleSelectOption = (qId: number, option: string) => {
-        if (submitted && examMode === 'practice') return;
-        setUserAnswers((prev) => ({ ...prev, [qId]: option }));
+    const handleSelectOption = (option: string) => {
+        if (isFeedbackOpen) return;
+        setSelectedOption(option);
+    };
+
+    // Check Answer action in Practice Mode
+    const handleCheckAnswer = () => {
+        if (!selectedOption || !quizData) return;
+        const currentQ = quizData[currentQIndex];
+
+        setUserAnswers((prev) => ({ ...prev, [currentQ.id]: selectedOption }));
+
+        if (examMode === 'practice') {
+            setIsFeedbackOpen(true);
+        } else {
+            // Mock exam: advance directly
+            handleAdvanceQuestion();
+        }
+    };
+
+    const handleAdvanceQuestion = () => {
+        setIsFeedbackOpen(false);
+        setSelectedOption(null);
+
+        if (quizData && currentQIndex + 1 < quizData.length) {
+            setCurrentQIndex((prev) => prev + 1);
+        } else {
+            handleSubmitExam();
+        }
     };
 
     const handleSubmitExam = () => {
         if (timerRef.current) clearInterval(timerRef.current);
         setSubmitted(true);
+        setIsFeedbackOpen(false);
     };
 
     // Score Calculations
@@ -170,14 +212,14 @@ const QuizScreen = ({ route, navigation }: any) => {
         if (!quizData) return { correct: 0, total: 0, percentage: 0, grade: 'F', weakSpots: [] };
 
         let correct = 0;
-        const weakSpots: string[] = [];
+        const weakSpots: { question: string; explanation: string }[] = [];
 
         quizData.forEach((q) => {
             const ans = userAnswers[q.id];
             if (ans === q.correct_answer) {
                 correct++;
             } else {
-                weakSpots.push(q.question);
+                weakSpots.push({ question: q.question, explanation: q.explanation });
             }
         });
 
@@ -205,37 +247,60 @@ const QuizScreen = ({ route, navigation }: any) => {
         ? formatTitle(currentDocObj.original_name)
         : initialTitle || 'Select Document';
 
+    const currentQ = quizData ? quizData[currentQIndex] : null;
+    const isAnswerCorrect = currentQ && selectedOption ? selectedOption === currentQ.correct_answer : false;
+
     return (
         <View style={styles.container}>
             {/* ── Top Header ── */}
-            <View style={styles.headerRow}>
-                <TouchableOpacity
-                    onPress={() => navigation?.goBack?.()}
-                    style={styles.backBtn}
-                    activeOpacity={0.7}
-                    accessibilityLabel="Go Back"
-                >
-                    <ChevronLeft size={22} color={colors.text} />
-                </TouchableOpacity>
-
-                <View style={styles.titleContainer}>
-                    <Text style={styles.headerTitle}>AI Exam &amp; Quiz Arena</Text>
-                    <Text style={styles.headerSub}>Adaptive Testing &amp; Timed Mock Exams</Text>
-                </View>
-
-                {quizData && (
+            {!quizData || submitted ? (
+                <View style={styles.headerRow}>
                     <TouchableOpacity
-                        onPress={() => handleGenerateQuiz()}
-                        style={styles.headerActionBtn}
+                        onPress={() => navigation?.goBack?.()}
+                        style={styles.backBtn}
                         activeOpacity={0.7}
+                        accessibilityLabel="Go Back"
                     >
-                        <RotateCw size={17} color={colors.textMuted} />
+                        <ArrowLeft size={20} color={colors.text} strokeWidth={2} />
                     </TouchableOpacity>
-                )}
-            </View>
+
+                    <View style={styles.titleContainer}>
+                        <Text style={styles.headerTitle}>Practice &amp; Quiz Arena</Text>
+                        <Text style={styles.headerSub}>Adaptive Tests &amp; Active Recall</Text>
+                    </View>
+                </View>
+            ) : (
+                /* Active Quiz Top Bar with Exit X and Progress Bar */
+                <View style={styles.activeTopBar}>
+                    <TouchableOpacity
+                        onPress={() => setIsQuitConfirmOpen(true)}
+                        style={styles.closeQuizBtn}
+                        accessibilityLabel="Quit practice"
+                    >
+                        <X size={22} color={colors.textMuted} strokeWidth={2.5} />
+                    </TouchableOpacity>
+
+                    <View style={{ flex: 1, marginHorizontal: 12 }}>
+                        <TactileProgressBar
+                            progress={((currentQIndex + 1) / quizData.length) * 100}
+                            height={12}
+                            variant="accent"
+                        />
+                    </View>
+
+                    {examMode === 'mock' && (
+                        <View style={[styles.timerBadge, timeLeft < 60 && { backgroundColor: colors.dangerMuted }]}>
+                            <Timer size={14} color={timeLeft < 60 ? colors.danger : colors.accent} />
+                            <Text style={[styles.timerText, { color: timeLeft < 60 ? colors.danger : colors.accent }]}>
+                                {formatTimer(timeLeft)}
+                            </Text>
+                        </View>
+                    )}
+                </View>
+            )}
 
             {/* ================================================================= */}
-            {/* QUIZ SETUP SCREEN */}
+            {/* 1. QUIZ SETUP SCREEN */}
             {/* ================================================================= */}
             {!quizData && !generating && (
                 <ScrollView
@@ -245,7 +310,7 @@ const QuizScreen = ({ route, navigation }: any) => {
                 >
                     {/* Mode Selector */}
                     <View style={styles.sectionBox}>
-                        <Text style={styles.sectionLabel}>Select Assessment Mode</Text>
+                        <Text style={styles.sectionLabel}>Select Mode</Text>
                         <SegmentedControl
                             options={[
                                 { key: 'practice', label: 'Practice Quiz', icon: BookOpen },
@@ -259,7 +324,7 @@ const QuizScreen = ({ route, navigation }: any) => {
                     {/* Document Selector Chips */}
                     {docs.length > 0 && (
                         <View style={styles.sectionBox}>
-                            <Text style={styles.sectionLabel}>Target Study Document</Text>
+                            <Text style={styles.sectionLabel}>Target Document</Text>
                             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.docScroll}>
                                 {docs.map((doc) => {
                                     const isSel = doc.id === selectedDocId;
@@ -290,31 +355,37 @@ const QuizScreen = ({ route, navigation }: any) => {
                     {/* Custom Topic Input */}
                     <View style={styles.sectionBox}>
                         <Text style={styles.sectionLabel}>Topic Focus (Optional)</Text>
-                        <View style={styles.inputWrap}>
-                            <TextInput
-                                style={styles.textInput}
-                                placeholder={`e.g., Core Principles of ${displayDocTitle.substring(0, 20)}...`}
-                                placeholderTextColor={colors.textSubtle}
-                                value={customTopic}
-                                onChangeText={setCustomTopic}
-                            />
-                        </View>
+                        <TextInput
+                            style={styles.textInput}
+                            placeholder={`e.g. Chapter 3 transport mechanisms...`}
+                            placeholderTextColor={colors.textMuted}
+                            value={customTopic}
+                            onChangeText={setCustomTopic}
+                        />
                     </View>
 
                     {/* Question Count Selector */}
                     <View style={styles.sectionBox}>
-                        <Text style={styles.sectionLabel}>Question Quantity</Text>
+                        <Text style={styles.sectionLabel}>Questions Count</Text>
                         <View style={styles.countRow}>
                             {[3, 5, 10, 15].map((num) => {
                                 const isSel = numQuestions === num;
                                 return (
                                     <TouchableOpacity
                                         key={num}
-                                        style={[styles.countBtn, isSel && styles.countBtnActive]}
+                                        style={[
+                                            styles.countBtn,
+                                            isSel && { borderColor: colors.accent, backgroundColor: colors.accentMuted },
+                                        ]}
                                         onPress={() => setNumQuestions(num)}
                                     >
-                                        <Text style={[styles.countBtnText, isSel && styles.countBtnTextActive]}>
-                                            {num} Questions
+                                        <Text
+                                            style={[
+                                                styles.countBtnText,
+                                                isSel && { color: colors.accent, fontWeight: '800' },
+                                            ]}
+                                        >
+                                            {num}
                                         </Text>
                                     </TouchableOpacity>
                                 );
@@ -322,185 +393,135 @@ const QuizScreen = ({ route, navigation }: any) => {
                         </View>
                     </View>
 
-                    {/* Generate Button */}
-                    <TouchableOpacity
-                        style={styles.generateBtn}
+                    {/* Primary Generate Button */}
+                    <TactileButton
+                        title={examMode === 'mock' ? 'Start Mock Exam' : 'Start Practice Quiz'}
                         onPress={() => handleGenerateQuiz()}
-                        activeOpacity={0.85}
-                    >
-                        <Sparkles size={18} color={colors.textInverse} style={{ marginRight: 8 }} />
-                        <Text style={styles.generateBtnText}>
-                            {examMode === 'mock' ? 'Start Timed Mock Exam' : 'Generate Practice Quiz'}
-                        </Text>
-                    </TouchableOpacity>
+                        variant="primary"
+                        size="lg"
+                        fullWidth
+                        icon={Sparkles}
+                        style={{ marginTop: 8, marginBottom: 16 }}
+                    />
 
                     {/* Info Card */}
-                    <View style={styles.infoCard}>
-                        <Award size={20} color={colors.indigo} style={{ marginRight: 12, marginTop: 2 }} />
+                    <TactileCard contentStyle={{ padding: 16, flexDirection: 'row', gap: 12, alignItems: 'center' }}>
+                        <Award size={28} color={colors.accent} strokeWidth={2.2} />
                         <View style={{ flex: 1 }}>
-                            <Text style={styles.infoCardTitle}>Active Recall Assessment</Text>
+                            <Text style={styles.infoCardTitle}>Active Recall Practice</Text>
                             <Text style={styles.infoCardText}>
-                                The AI extracts real verified test questions grounded in your course materials.
-                                In Mock Exam mode, questions are timed with full diagnostic scorecards at completion.
+                                Formulated directly from your notes with instant feedback and step-by-step answer derivations.
                             </Text>
                         </View>
-                    </View>
+                    </TactileCard>
                 </ScrollView>
             )}
 
             {/* ================================================================= */}
-            {/* GENERATING SKELETON / LOADER */}
+            {/* 2. GENERATING SKELETON */}
             {/* ================================================================= */}
             {generating && (
                 <View style={styles.centered}>
                     <ActivityIndicator size="large" color={colors.accent} />
-                    <Text style={styles.generatingTitle}>Synthesizing Rigorous Quiz</Text>
+                    <Text style={styles.generatingTitle}>Synthesizing Quiz Questions</Text>
                     <Text style={styles.generatingSub}>
-                        Analyzing notes, formulating distractors, and building answer explanations...
+                        Analyzing materials, formulating distractors, and preparing verified explanations...
                     </Text>
                 </View>
             )}
 
             {/* ================================================================= */}
-            {/* ACTIVE QUIZ / EXAM SCREEN */}
+            {/* 3. ACTIVE 1-QUESTION PER SCREEN PRACTICE FLOW */}
             {/* ================================================================= */}
-            {quizData && !submitted && (
+            {quizData && !submitted && currentQ && (
                 <View style={styles.activeQuizContainer}>
-                    {/* Status Top Bar */}
-                    <View style={styles.quizProgressBarRow}>
-                        <Text style={styles.questionIndexText}>
+                    <ScrollView
+                        style={{ flex: 1 }}
+                        contentContainerStyle={styles.questionScrollContent}
+                        showsVerticalScrollIndicator={false}
+                    >
+                        <Text style={styles.questionNumLabel}>
                             Question {currentQIndex + 1} of {quizData.length}
                         </Text>
+                        <Text style={styles.questionText}>{currentQ.question}</Text>
 
-                        {examMode === 'mock' && (
-                            <View style={[styles.timerBadge, timeLeft < 60 && styles.timerBadgeWarning]}>
-                                <Timer size={14} color={timeLeft < 60 ? colors.danger : colors.accent} />
-                                <Text style={[styles.timerText, timeLeft < 60 && { color: colors.danger }]}>
-                                    {formatTimer(timeLeft)}
-                                </Text>
-                            </View>
-                        )}
-                    </View>
+                        {/* 4 Large Tactile Answer Cards */}
+                        <View style={styles.optionsContainer}>
+                            {currentQ.options.map((opt, oIdx) => {
+                                const isSelected = selectedOption === opt;
+                                const letter = String.fromCharCode(65 + oIdx);
 
-                    {/* Progress Bar */}
-                    <View style={styles.progressBarBg}>
-                        <View
-                            style={[
-                                styles.progressBarFill,
-                                { width: `${((currentQIndex + 1) / quizData.length) * 100}%` },
-                            ]}
+                                return (
+                                    <TactileCard
+                                        key={oIdx}
+                                        selected={isSelected}
+                                        onPress={() => handleSelectOption(opt)}
+                                        variant="accent"
+                                        contentStyle={{
+                                            flexDirection: 'row',
+                                            alignItems: 'center',
+                                            padding: 16,
+                                            gap: 12,
+                                        }}
+                                        accessibilityLabel={`Option ${letter}: ${opt}`}
+                                    >
+                                        <View
+                                            style={[
+                                                styles.optionLetterPill,
+                                                {
+                                                    backgroundColor: isSelected ? colors.accent : colors.surfaceRaised,
+                                                },
+                                            ]}
+                                        >
+                                            <Text
+                                                style={[
+                                                    styles.optionLetterText,
+                                                    { color: isSelected ? colors.textInverse : colors.text },
+                                                ]}
+                                            >
+                                                {letter}
+                                            </Text>
+                                        </View>
+
+                                        <Text
+                                            style={[
+                                                styles.optionText,
+                                                { color: isSelected ? colors.accent : colors.text },
+                                            ]}
+                                        >
+                                            {opt}
+                                        </Text>
+                                    </TactileCard>
+                                );
+                            })}
+                        </View>
+                    </ScrollView>
+
+                    {/* Bottom Primary Check / Submit Action Bar */}
+                    <View style={styles.bottomBar}>
+                        <TactileButton
+                            title="Check Answer"
+                            onPress={handleCheckAnswer}
+                            disabled={!selectedOption}
+                            variant="primary"
+                            size="lg"
+                            fullWidth
                         />
                     </View>
 
-                    {/* Question Card Scroll Area */}
-                    <ScrollView
-                        style={styles.quizScroll}
-                        contentContainerStyle={styles.quizScrollContent}
-                        showsVerticalScrollIndicator={false}
-                    >
-                        {(() => {
-                            const currentQ = quizData[currentQIndex];
-                            const selectedOption = userAnswers[currentQ.id];
-                            const isAnswered = selectedOption !== undefined;
-
-                            return (
-                                <View style={styles.questionCard}>
-                                    <Text style={styles.questionText}>{currentQ.question}</Text>
-
-                                    {/* Options List */}
-                                    <View style={styles.optionsList}>
-                                        {currentQ.options.map((opt, oIdx) => {
-                                            const isSelected = selectedOption === opt;
-                                            const isCorrect = opt === currentQ.correct_answer;
-
-                                            let optStyle: any = styles.optionBtn;
-                                            let textStyle: any = styles.optionText;
-
-                                            if (examMode === 'practice' && isAnswered) {
-                                                if (isCorrect) {
-                                                    optStyle = [styles.optionBtn, styles.optionCorrect];
-                                                    textStyle = [styles.optionText, styles.optionTextCorrect];
-                                                } else if (isSelected && !isCorrect) {
-                                                    optStyle = [styles.optionBtn, styles.optionIncorrect];
-                                                    textStyle = [styles.optionText, styles.optionTextIncorrect];
-                                                }
-                                            } else if (isSelected) {
-                                                optStyle = [styles.optionBtn, styles.optionSelected];
-                                                textStyle = [styles.optionText, styles.optionTextSelected];
-                                            }
-
-                                            return (
-                                                <TouchableOpacity
-                                                    key={oIdx}
-                                                    style={optStyle}
-                                                    onPress={() => handleSelectOption(currentQ.id, opt)}
-                                                    activeOpacity={0.8}
-                                                >
-                                                    <View style={styles.optionLetterBadge}>
-                                                        <Text style={styles.optionLetterText}>
-                                                            {String.fromCharCode(65 + oIdx)}
-                                                        </Text>
-                                                    </View>
-                                                    <Text style={textStyle}>{opt}</Text>
-                                                </TouchableOpacity>
-                                            );
-                                        })}
-                                    </View>
-
-                                    {/* Practice Mode Immediate Explanation */}
-                                    {examMode === 'practice' && isAnswered && (
-                                        <View style={styles.explanationBox}>
-                                            <View style={styles.explanationHeader}>
-                                                <HelpCircle size={14} color={colors.accent} />
-                                                <Text style={styles.explanationLabel}>
-                                                    {selectedOption === currentQ.correct_answer
-                                                        ? 'CORRECT'
-                                                        : 'EXPLANATION'}
-                                                </Text>
-                                            </View>
-                                            <Text style={styles.explanationText}>
-                                                {currentQ.explanation}
-                                            </Text>
-                                        </View>
-                                    )}
-                                </View>
-                            );
-                        })()}
-                    </ScrollView>
-
-                    {/* Bottom Navigation Buttons */}
-                    <View style={styles.bottomNavRow}>
-                        <TouchableOpacity
-                            style={[styles.navStepBtn, currentQIndex === 0 && { opacity: 0.4 }]}
-                            disabled={currentQIndex === 0}
-                            onPress={() => setCurrentQIndex((prev) => prev - 1)}
-                        >
-                            <Text style={styles.navStepBtnText}>Previous</Text>
-                        </TouchableOpacity>
-
-                        {currentQIndex < quizData.length - 1 ? (
-                            <TouchableOpacity
-                                style={[styles.navStepBtn, styles.navStepBtnPrimary]}
-                                onPress={() => setCurrentQIndex((prev) => prev + 1)}
-                            >
-                                <Text style={styles.navStepBtnTextPrimary}>Next Question</Text>
-                                <ArrowRight size={16} color={colors.textInverse} style={{ marginLeft: 6 }} />
-                            </TouchableOpacity>
-                        ) : (
-                            <TouchableOpacity
-                                style={[styles.navStepBtn, styles.navStepBtnSubmit]}
-                                onPress={handleSubmitExam}
-                            >
-                                <CheckCircle2 size={16} color={colors.textInverse} style={{ marginRight: 6 }} />
-                                <Text style={styles.navStepBtnTextPrimary}>Submit Exam</Text>
-                            </TouchableOpacity>
-                        )}
-                    </View>
+                    {/* Sliding Feedback Bottom Sheet (Duolingo Style) */}
+                    <QuizFeedbackSheet
+                        visible={isFeedbackOpen}
+                        isCorrect={isAnswerCorrect}
+                        correctAnswerText={currentQ.correct_answer}
+                        explanation={currentQ.explanation}
+                        onContinue={handleAdvanceQuestion}
+                    />
                 </View>
             )}
 
             {/* ================================================================= */}
-            {/* SCORECARD & WEAK-SPOT REPORT */}
+            {/* 4. RESULT & SCORECARD SCREEN */}
             {/* ================================================================= */}
             {quizData && submitted && (
                 <ScrollView
@@ -508,18 +529,18 @@ const QuizScreen = ({ route, navigation }: any) => {
                     contentContainerStyle={styles.scrollContent}
                     showsVerticalScrollIndicator={false}
                 >
-                    <View style={styles.scoreCardContainer}>
-                        <View style={styles.trophyWrapper}>
-                            <Award size={48} color={colors.accent} />
+                    <TactileCard contentStyle={{ padding: 24, alignItems: 'center' }}>
+                        <View style={[styles.trophyWrapper, { backgroundColor: colors.accentMuted }]}>
+                            <Award size={52} color={colors.accent} strokeWidth={2.5} />
                         </View>
 
-                        <Text style={styles.scoreTitle}>Assessment Completed!</Text>
+                        <Text style={styles.scoreTitle}>Quiz Completed!</Text>
                         <Text style={styles.scoreSub}>{activeTopic}</Text>
 
                         {/* Grade Badge */}
-                        <View style={styles.gradeCircle}>
-                            <Text style={styles.gradeText}>{scoreSummary.grade}</Text>
-                            <Text style={styles.percentageText}>{scoreSummary.percentage}%</Text>
+                        <View style={[styles.gradeCircle, { backgroundColor: colors.surfaceRaised, borderColor: colors.accent }]}>
+                            <Text style={[styles.gradeText, { color: colors.accent }]}>{scoreSummary.grade}</Text>
+                            <Text style={[styles.percentageText, { color: colors.textMuted }]}>{scoreSummary.percentage}%</Text>
                         </View>
 
                         <Text style={styles.scoreRatio}>
@@ -530,76 +551,81 @@ const QuizScreen = ({ route, navigation }: any) => {
                         {scoreSummary.weakSpots.length > 0 && (
                             <View style={styles.weakSpotBox}>
                                 <View style={styles.weakSpotHeader}>
-                                    <AlertTriangle size={15} color={colors.warning} />
-                                    <Text style={styles.weakSpotLabel}>
-                                        Weak Spots Detected ({scoreSummary.weakSpots.length})
+                                    <AlertTriangle size={16} color={colors.goldDark} />
+                                    <Text style={[styles.weakSpotLabel, { color: colors.goldDark }]}>
+                                        Weak Spots to Review ({scoreSummary.weakSpots.length})
                                     </Text>
                                 </View>
-                                <Text style={styles.weakSpotDesc}>
-                                    Concepts to review before test day:
-                                </Text>
-                                {scoreSummary.weakSpots.map((qText, i) => (
-                                    <Text key={i} style={styles.weakSpotItem}>
-                                        • {qText}
-                                    </Text>
+                                {scoreSummary.weakSpots.map((item, i) => (
+                                    <View key={i} style={styles.weakSpotItemBox}>
+                                        <Text style={styles.weakSpotQuestion}>• {item.question}</Text>
+                                        <Text style={styles.weakSpotExplanation}>{item.explanation}</Text>
+                                    </View>
                                 ))}
                             </View>
                         )}
 
-                        {/* Action Buttons */}
-                        <TouchableOpacity
-                            style={styles.retakeBtn}
+                        <TactileButton
+                            title="Practice Again"
                             onPress={() => handleGenerateQuiz()}
-                            activeOpacity={0.85}
-                        >
-                            <RotateCw size={16} color={colors.textInverse} style={{ marginRight: 6 }} />
-                            <Text style={styles.retakeBtnText}>Generate New Quiz</Text>
-                        </TouchableOpacity>
+                            variant="primary"
+                            size="lg"
+                            fullWidth
+                            icon={RotateCw}
+                            style={{ marginBottom: 10, marginTop: 10 }}
+                        />
 
-                        <TouchableOpacity
-                            style={styles.backConfigBtn}
+                        <TactileButton
+                            title="Back to Quiz Arena"
                             onPress={() => {
                                 setQuizData(null);
                                 setSubmitted(false);
                             }}
-                            activeOpacity={0.8}
-                        >
-                            <Text style={styles.backConfigBtnText}>Configure Another Assessment</Text>
-                        </TouchableOpacity>
-                    </View>
+                            variant="secondary"
+                            size="md"
+                            fullWidth
+                        />
+                    </TactileCard>
                 </ScrollView>
             )}
+
+            {/* Quit Confirmation Dialog */}
+            <ConfirmDialog
+                visible={isQuitConfirmOpen}
+                title="Leave Quiz Session?"
+                message="Your current quiz progress will be lost."
+                confirmText="Leave"
+                cancelText="Keep Going"
+                isDestructive
+                onConfirm={() => {
+                    setIsQuitConfirmOpen(false);
+                    setQuizData(null);
+                }}
+                onCancel={() => setIsQuitConfirmOpen(false)}
+            />
         </View>
     );
 };
 
-const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
     StyleSheet.create({
         container: {
             flex: 1,
             backgroundColor: colors.bg,
-            paddingTop: 50,
+            paddingTop: topGap,
         },
         headerRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingHorizontal: spacing.lg,
-            marginBottom: spacing.md,
-        },
-        headerIconBg: {
-            width: 38,
-            height: 38,
-            borderRadius: radii.md,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
-            alignItems: 'center',
+            paddingHorizontal: 20,
+            marginBottom: 14,
         },
         backBtn: {
             width: 38,
             height: 38,
-            backgroundColor: colors.surfaceSubtle,
+            backgroundColor: colors.surface,
             borderRadius: radii.md,
-            borderWidth: 1,
+            borderWidth: 2,
             borderColor: colors.border,
             justifyContent: 'center',
             alignItems: 'center',
@@ -610,41 +636,54 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         },
         headerTitle: {
             color: colors.text,
-            fontSize: typography.sizes.base,
-            fontWeight: '700',
+            fontSize: typography.sizes.md,
+            fontWeight: '800',
         },
         headerSub: {
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
+            fontSize: 11,
+            fontWeight: '600',
             marginTop: 1,
         },
-        headerActionBtn: {
-            width: 38,
-            height: 38,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: radii.md,
-            borderWidth: 1,
-            borderColor: colors.border,
-            justifyContent: 'center',
+        activeTopBar: {
+            flexDirection: 'row',
             alignItems: 'center',
+            paddingHorizontal: 20,
+            paddingBottom: 10,
+        },
+        closeQuizBtn: {
+            padding: 4,
+        },
+        timerBadge: {
+            flexDirection: 'row',
+            alignItems: 'center',
+            backgroundColor: colors.accentMuted,
+            paddingHorizontal: 10,
+            paddingVertical: 4,
+            borderRadius: radii.full,
+            gap: 4,
+        },
+        timerText: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
         },
         scroll: {
             flex: 1,
-            paddingHorizontal: spacing.lg,
+            paddingHorizontal: 20,
         },
         scrollContent: {
-            paddingBottom: spacing.xxl,
+            paddingBottom: 110,
         },
         sectionBox: {
-            marginBottom: spacing.md,
+            marginBottom: 14,
         },
         sectionLabel: {
-            color: colors.textSubtle,
+            color: colors.textSecondary,
             fontSize: typography.sizes.xs,
-            fontWeight: '700',
+            fontWeight: '800',
             textTransform: 'uppercase',
-            letterSpacing: 0.8,
-            marginBottom: 6,
+            letterSpacing: 0.5,
+            marginBottom: 8,
         },
         docScroll: {
             flexDirection: 'row',
@@ -654,9 +693,9 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
             alignItems: 'center',
             paddingHorizontal: 12,
             paddingVertical: 8,
-            borderRadius: radii.md,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
+            borderRadius: radii.full,
+            backgroundColor: colors.surface,
+            borderWidth: 1.5,
             borderColor: colors.border,
             marginRight: 8,
             maxWidth: 200,
@@ -668,24 +707,22 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         docChipText: {
             color: colors.textMuted,
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
         },
         docChipTextActive: {
             color: colors.textInverse,
-            fontWeight: '700',
-        },
-        inputWrap: {
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            paddingHorizontal: spacing.sm,
-            paddingVertical: 8,
+            fontWeight: '800',
         },
         textInput: {
-            color: colors.text,
+            backgroundColor: colors.surface,
+            borderWidth: 2,
+            borderColor: colors.border,
+            borderRadius: radii.md,
+            paddingHorizontal: 14,
+            paddingVertical: 10,
             fontSize: typography.sizes.sm,
-            padding: 0,
+            color: colors.text,
+            fontWeight: '600',
         },
         countRow: {
             flexDirection: 'row',
@@ -693,378 +730,178 @@ const createStyles = (colors: ThemeColors, shadows: typeof darkShadows) =>
         },
         countBtn: {
             flex: 1,
-            paddingVertical: 9,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
+            paddingVertical: 12,
+            backgroundColor: colors.surface,
+            borderWidth: 2,
             borderColor: colors.border,
-            borderRadius: radii.md,
+            borderRadius: radii.lg,
             alignItems: 'center',
-        },
-        countBtnActive: {
-            backgroundColor: colors.accentMuted,
-            borderColor: colors.accent,
         },
         countBtnText: {
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-        },
-        countBtnTextActive: {
-            color: colors.accent,
-            fontWeight: '700',
-        },
-        generateBtn: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.accent,
-            paddingVertical: 14,
-            borderRadius: radii.lg,
-            marginTop: spacing.sm,
-            marginBottom: spacing.lg,
-            ...shadows.glowAccent,
-        },
-        generateBtnText: {
-            color: colors.textInverse,
             fontSize: typography.sizes.sm,
             fontWeight: '700',
-        },
-        infoCard: {
-            flexDirection: 'row',
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.lg,
-            padding: spacing.md,
-            ...shadows.card,
         },
         infoCardTitle: {
-            color: colors.text,
             fontSize: typography.sizes.sm,
-            fontWeight: '700',
-            marginBottom: 3,
+            fontWeight: '800',
+            color: colors.text,
+            marginBottom: 2,
         },
         infoCardText: {
-            color: colors.textSecondary,
             fontSize: typography.sizes.xs,
+            color: colors.textSecondary,
             lineHeight: 18,
+            fontWeight: '500',
         },
         centered: {
             flex: 1,
             justifyContent: 'center',
             alignItems: 'center',
-            paddingHorizontal: spacing.xl,
+            paddingHorizontal: 24,
         },
         generatingTitle: {
+            fontSize: typography.sizes.lg,
+            fontWeight: '800',
             color: colors.text,
-            fontSize: typography.sizes.md,
-            fontWeight: '700',
             marginTop: 16,
             textAlign: 'center',
         },
         generatingSub: {
-            color: colors.textMuted,
             fontSize: typography.sizes.xs,
+            color: colors.textMuted,
             textAlign: 'center',
             marginTop: 6,
             lineHeight: 18,
         },
         activeQuizContainer: {
             flex: 1,
-            paddingHorizontal: spacing.lg,
             justifyContent: 'space-between',
         },
-        quizProgressBarRow: {
-            flexDirection: 'row',
-            justifyContent: 'space-between',
-            alignItems: 'center',
+        questionScrollContent: {
+            paddingHorizontal: 20,
+            paddingTop: 10,
+            paddingBottom: 20,
+        },
+        questionNumLabel: {
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
+            textTransform: 'uppercase',
+            letterSpacing: 0.5,
+            color: colors.textMuted,
             marginBottom: 8,
         },
-        questionIndexText: {
-            color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-        },
-        timerBadge: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            backgroundColor: colors.accentMuted,
-            paddingHorizontal: 8,
-            paddingVertical: 3,
-            borderRadius: radii.full,
-            gap: 4,
-        },
-        timerBadgeWarning: {
-            backgroundColor: colors.dangerMuted,
-        },
-        timerText: {
-            color: colors.accent,
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-        },
-        progressBarBg: {
-            height: 4,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: 2,
-            marginBottom: spacing.md,
-            overflow: 'hidden',
-        },
-        progressBarFill: {
-            height: '100%',
-            backgroundColor: colors.accent,
-        },
-        quizScroll: {
-            flex: 1,
-        },
-        quizScrollContent: {
-            paddingBottom: spacing.lg,
-        },
-        questionCard: {
-            backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.xl,
-            padding: spacing.lg,
-            ...shadows.card,
-        },
         questionText: {
+            fontSize: 20,
+            fontWeight: '800',
             color: colors.text,
-            fontSize: typography.sizes.base,
-            fontWeight: '700',
-            lineHeight: 24,
-            marginBottom: spacing.lg,
+            lineHeight: 28,
+            marginBottom: 20,
         },
-        optionsList: {
-            gap: 10,
+        optionsContainer: {
+            gap: 6,
         },
-        optionBtn: {
-            flexDirection: 'row',
+        optionLetterPill: {
+            width: 32,
+            height: 32,
+            borderRadius: 16,
             alignItems: 'center',
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            padding: spacing.md,
-        },
-        optionSelected: {
-            borderColor: colors.accent,
-            backgroundColor: colors.accentMuted,
-        },
-        optionCorrect: {
-            borderColor: colors.success,
-            backgroundColor: colors.successMuted,
-        },
-        optionIncorrect: {
-            borderColor: colors.danger,
-            backgroundColor: colors.dangerMuted,
-        },
-        optionLetterBadge: {
-            width: 24,
-            height: 24,
-            borderRadius: 12,
-            backgroundColor: 'rgba(255, 255, 255, 0.08)',
             justifyContent: 'center',
-            alignItems: 'center',
-            marginRight: 10,
         },
         optionLetterText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '700',
-            color: colors.textMuted,
+            fontSize: typography.sizes.sm,
+            fontWeight: '800',
         },
         optionText: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.sm,
             flex: 1,
-            fontWeight: '500',
-        },
-        optionTextSelected: {
-            color: colors.accent,
+            fontSize: typography.sizes.md,
             fontWeight: '700',
+            lineHeight: 22,
         },
-        optionTextCorrect: {
-            color: colors.success,
-            fontWeight: '700',
-        },
-        optionTextIncorrect: {
-            color: colors.danger,
-            fontWeight: '600',
-        },
-        explanationBox: {
-            marginTop: spacing.md,
-            padding: spacing.sm,
-            backgroundColor: colors.surfaceSubtle,
-            borderRadius: radii.md,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.accent,
-        },
-        explanationHeader: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            marginBottom: 4,
-            gap: 4,
-        },
-        explanationLabel: {
-            color: colors.accent,
-            fontSize: 10,
-            fontWeight: '800',
-            letterSpacing: 0.5,
-        },
-        explanationText: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.xs,
-            lineHeight: 18,
-        },
-        bottomNavRow: {
-            flexDirection: 'row',
-            gap: 10,
-            paddingVertical: spacing.md,
-            borderTopWidth: 1,
+        bottomBar: {
+            paddingHorizontal: 20,
+            paddingVertical: 14,
+            borderTopWidth: 2,
             borderTopColor: colors.border,
-        },
-        navStepBtn: {
-            flex: 1,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            paddingVertical: 12,
-            borderRadius: radii.md,
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-        },
-        navStepBtnPrimary: {
-            backgroundColor: colors.accent,
-            borderColor: colors.accent,
-        },
-        navStepBtnSubmit: {
-            backgroundColor: colors.success,
-            borderColor: colors.success,
-        },
-        navStepBtnText: {
-            color: colors.textMuted,
-            fontSize: typography.sizes.sm,
-            fontWeight: '600',
-        },
-        navStepBtnTextPrimary: {
-            color: colors.textInverse,
-            fontSize: typography.sizes.sm,
-            fontWeight: '700',
-        },
-        scoreCardContainer: {
             backgroundColor: colors.surface,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.xl,
-            padding: spacing.xl,
-            alignItems: 'center',
-            ...shadows.card,
+            paddingBottom: Platform.OS === 'ios' ? 32 : 14,
         },
         trophyWrapper: {
             width: 80,
             height: 80,
             borderRadius: 40,
-            backgroundColor: colors.accentMuted,
-            justifyContent: 'center',
             alignItems: 'center',
-            marginBottom: spacing.md,
+            justifyContent: 'center',
+            marginBottom: 14,
         },
         scoreTitle: {
+            fontSize: typography.sizes.xl,
+            fontWeight: '800',
             color: colors.text,
-            fontSize: typography.sizes.lg,
-            fontWeight: '700',
-            textAlign: 'center',
+            marginBottom: 4,
         },
         scoreSub: {
-            color: colors.textMuted,
             fontSize: typography.sizes.xs,
-            marginTop: 2,
-            textAlign: 'center',
-            marginBottom: spacing.lg,
+            color: colors.textMuted,
+            fontWeight: '600',
+            marginBottom: 16,
         },
         gradeCircle: {
-            width: 110,
-            height: 110,
-            borderRadius: 55,
-            borderWidth: 4,
-            borderColor: colors.accent,
-            justifyContent: 'center',
+            width: 90,
+            height: 90,
+            borderRadius: 45,
+            borderWidth: 3,
             alignItems: 'center',
-            backgroundColor: colors.surfaceSubtle,
-            marginBottom: spacing.md,
+            justifyContent: 'center',
+            marginBottom: 12,
         },
         gradeText: {
-            color: colors.text,
-            fontSize: 32,
-            fontWeight: '900',
+            fontSize: 28,
+            fontWeight: '800',
         },
         percentageText: {
-            color: colors.accent,
-            fontSize: typography.sizes.xs,
+            fontSize: 12,
             fontWeight: '700',
         },
         scoreRatio: {
-            color: colors.textSecondary,
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
-            marginBottom: spacing.md,
+            fontWeight: '700',
+            color: colors.textSecondary,
+            marginBottom: 16,
         },
         weakSpotBox: {
             width: '100%',
-            backgroundColor: colors.surfaceSubtle,
-            borderWidth: 1,
-            borderColor: colors.border,
-            borderRadius: radii.md,
-            padding: spacing.md,
-            marginBottom: spacing.lg,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.warning,
+            backgroundColor: colors.surfaceRaised,
+            borderRadius: radii.xl,
+            padding: 14,
+            marginBottom: 16,
         },
         weakSpotHeader: {
             flexDirection: 'row',
             alignItems: 'center',
             gap: 6,
-            marginBottom: 4,
+            marginBottom: 8,
         },
         weakSpotLabel: {
-            color: colors.warning,
+            fontSize: typography.sizes.xs,
+            fontWeight: '800',
+            textTransform: 'uppercase',
+        },
+        weakSpotItemBox: {
+            paddingVertical: 6,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.borderLight,
+        },
+        weakSpotQuestion: {
             fontSize: typography.sizes.xs,
             fontWeight: '700',
+            color: colors.text,
+            marginBottom: 2,
         },
-        weakSpotDesc: {
-            color: colors.textSubtle,
+        weakSpotExplanation: {
             fontSize: 11,
-            marginBottom: 6,
-        },
-        weakSpotItem: {
-            color: colors.textSecondary,
-            fontSize: typography.sizes.xs,
-            lineHeight: 18,
-            marginBottom: 4,
-        },
-        retakeBtn: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center',
-            backgroundColor: colors.accent,
-            width: '100%',
-            paddingVertical: 13,
-            borderRadius: radii.md,
-            marginBottom: 8,
-            ...shadows.glowAccent,
-        },
-        retakeBtnText: {
-            color: colors.textInverse,
-            fontSize: typography.sizes.sm,
-            fontWeight: '700',
-        },
-        backConfigBtn: {
-            paddingVertical: 10,
-        },
-        backConfigBtnText: {
             color: colors.textMuted,
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            lineHeight: 16,
         },
     });
 

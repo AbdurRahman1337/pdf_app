@@ -6,13 +6,16 @@ import {
     TouchableOpacity,
     ScrollView,
     Keyboard,
+    KeyboardAvoidingView,
     Platform,
     ActivityIndicator,
     StyleSheet,
     Modal,
     Clipboard,
     Alert,
+    Animated,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
     MessageSquare,
@@ -29,14 +32,24 @@ import {
     BookOpen,
     HelpCircle,
     X,
+    ArrowLeft,
 } from 'lucide-react-native';
 import apiClient from '../../../core/network/apiClient';
-import { useTheme } from '../../../core/theme/ThemeContext';
+import { useTheme, useSafeTopGap, getStaticSafeTopGap } from '../../../core/theme/ThemeContext';
 import { ThemeColors, typography, radii, spacing } from '../../../core/theme/tokens';
 import EmptyState from '../../../core/components/EmptyState';
 import ConfirmDialog from '../../../core/components/ConfirmDialog';
 import CitationModal from '../../../core/components/CitationModal';
+import TactileButton from '../../../core/components/TactileButton';
+import TactileCard from '../../../core/components/TactileCard';
+import TypingDots from '../../../core/components/TypingDots';
 import { DEFAULT_INITIAL_COURSE, CourseItem, SubjectItem, PDFDoc, LAST_STUDY_CONTEXT_KEY } from '../../pdf-list/presentation/DashboardScreen';
+import {
+    saveChatMessage,
+    loadChatMessages,
+    clearChatMessages,
+    loadCoursesHierarchy,
+} from '../../../core/db/database';
 
 export interface TutorCitation {
     page: number;
@@ -60,7 +73,8 @@ const TUTOR_HISTORY_PREFIX = '@pdf_app_tutor_history_';
 
 const ChatScreen = ({ route, navigation }: any) => {
     const { colors, shadows, isDark } = useTheme();
-    const styles = useMemo(() => createStyles(colors), [colors]);
+    const topGap = useSafeTopGap();
+    const styles = useMemo(() => createStyles(colors, topGap), [colors, topGap]);
 
     // Course Context & Scope
     const [courses, setCourses] = useState<CourseItem[]>([DEFAULT_INITIAL_COURSE]);
@@ -79,14 +93,65 @@ const ChatScreen = ({ route, navigation }: any) => {
     const [isIndexingReady, setIsIndexingReady] = useState(true);
     const [copiedId, setCopiedId] = useState<string | null>(null);
 
-    // Citation Inspection Modal
-    const [activeCitation, setActiveCitation] = useState<TutorCitation | null>(null);
-
     // Clear Chat Confirmation Modal
     const [isClearChatConfirmOpen, setIsClearChatConfirmOpen] = useState(false);
 
+    const insets = useSafeAreaInsets();
+    const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+
+    const bottomInset = insets?.bottom || 0;
+    const restingBottomPadding = Math.max(bottomInset, 0) + (Platform.OS === 'ios' ? 132 : 124);
+
+    const animBottomPadding = useRef(new Animated.Value(restingBottomPadding)).current;
+
     const abortControllerRef = useRef<AbortController | null>(null);
     const scrollViewRef = useRef<ScrollView>(null);
+
+    useEffect(() => {
+        const handleKeyboardShow = (e?: any) => {
+            setIsKeyboardVisible(true);
+            const kHeight = e?.endCoordinates?.height || 280;
+            const targetPadding = kHeight + (Platform.OS === 'ios' ? 8 : 10);
+            const duration = e?.duration && e.duration > 0 ? e.duration : 220;
+
+            Animated.timing(animBottomPadding, {
+                toValue: targetPadding,
+                duration,
+                useNativeDriver: false,
+            }).start();
+
+            setTimeout(() => {
+                scrollViewRef.current?.scrollToEnd({ animated: true });
+            }, 80);
+        };
+
+        const handleKeyboardHide = (e?: any) => {
+            setIsKeyboardVisible(false);
+            const duration = e?.duration && e.duration > 0 ? e.duration : 220;
+
+            Animated.timing(animBottomPadding, {
+                toValue: restingBottomPadding,
+                duration,
+                useNativeDriver: false,
+            }).start();
+        };
+
+        const showSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow',
+            handleKeyboardShow
+        );
+        const hideSub = Keyboard.addListener(
+            Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide',
+            handleKeyboardHide
+        );
+        const didHideSub = Keyboard.addListener('keyboardDidHide', handleKeyboardHide);
+
+        return () => {
+            showSub.remove();
+            hideSub.remove();
+            didHideSub.remove();
+        };
+    }, [restingBottomPadding]);
 
     useEffect(() => {
         loadTutorContextAndHistory();
@@ -94,17 +159,22 @@ const ChatScreen = ({ route, navigation }: any) => {
 
     const loadTutorContextAndHistory = async () => {
         try {
-            const coursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
-            let loadedCourses = [DEFAULT_INITIAL_COURSE];
-            if (coursesRaw) {
-                const parsed = JSON.parse(coursesRaw);
-                if (Array.isArray(parsed) && parsed.length > 0) {
-                    loadedCourses = parsed;
-                    setCourses(parsed);
+            let loadedCourses = await loadCoursesHierarchy();
+            if (!loadedCourses || loadedCourses.length === 0) {
+                const coursesRaw = await AsyncStorage.getItem('@pdf_app_courses_library_v3');
+                if (coursesRaw) {
+                    const parsed = JSON.parse(coursesRaw);
+                    if (Array.isArray(parsed) && parsed.length > 0) {
+                        loadedCourses = parsed;
+                    }
                 }
             }
 
-            // Default to last opened course
+            if (!loadedCourses || loadedCourses.length === 0) {
+                loadedCourses = [DEFAULT_INITIAL_COURSE];
+            }
+            setCourses(loadedCourses);
+
             let currentCourse = loadedCourses[0];
             const lastCtxRaw = await AsyncStorage.getItem(LAST_STUDY_CONTEXT_KEY);
             if (lastCtxRaw) {
@@ -117,12 +187,29 @@ const ChatScreen = ({ route, navigation }: any) => {
             setSelectedSubject(currentCourse.subjects[0] || null);
             setSelectedDoc(currentCourse.subjects[0]?.documents[0] || null);
 
-            // Load saved chat history for this course
-            const histRaw = await AsyncStorage.getItem(`${TUTOR_HISTORY_PREFIX}${currentCourse.id}`);
-            if (histRaw) {
-                const saved = JSON.parse(histRaw);
-                if (Array.isArray(saved) && saved.length > 0) {
-                    setMessages(saved);
+            // Load chat messages from SQLite
+            const sqliteMessages = await loadChatMessages('course', currentCourse.id);
+            if (sqliteMessages && sqliteMessages.length > 0) {
+                setMessages(sqliteMessages);
+            } else {
+                const histRaw = await AsyncStorage.getItem(`${TUTOR_HISTORY_PREFIX}${currentCourse.id}`);
+                if (histRaw) {
+                    const saved = JSON.parse(histRaw);
+                    if (Array.isArray(saved) && saved.length > 0) {
+                        setMessages(saved);
+                        // Backfill into SQLite
+                        for (const msg of saved) {
+                            await saveChatMessage({
+                                id: msg.id,
+                                scope_type: 'course',
+                                scope_id: currentCourse.id,
+                                sender: msg.sender,
+                                text: msg.text,
+                                citations: msg.citations,
+                                timestamp: msg.timestamp,
+                            });
+                        }
+                    }
                 }
             }
         } catch (e) {
@@ -134,31 +221,41 @@ const ChatScreen = ({ route, navigation }: any) => {
         setMessages(msgs);
         try {
             await AsyncStorage.setItem(`${TUTOR_HISTORY_PREFIX}${courseId}`, JSON.stringify(msgs));
+            // Save latest message to SQLite
+            const latest = msgs[msgs.length - 1];
+            if (latest) {
+                await saveChatMessage({
+                    id: latest.id,
+                    scope_type: 'course',
+                    scope_id: courseId,
+                    sender: latest.sender,
+                    text: latest.text,
+                    citations: latest.citations,
+                    timestamp: latest.timestamp,
+                });
+            }
         } catch (e) {
             console.warn('Failed to save tutor chat history:', e);
         }
     };
 
-    // Starter Questions derived from Course Summary
     const starterQuestions = useMemo(() => {
         const subName = selectedSubject?.name || 'Pre-Medical Science';
         return [
             `What are the most heavily-tested concepts in ${subName}?`,
-            `Explain the primary regulatory mechanisms and pathways in ${subName}.`,
-            `Compare and contrast key terms with clinical examples.`,
-            `Summarize the high-yield formulas and definitions on recent pages.`,
+            `Explain the primary regulatory pathways in ${subName}.`,
+            `Compare and contrast key definitions with examples.`,
+            `Summarize the high-yield formulas on recent pages.`,
         ];
     }, [selectedSubject]);
 
-    // Active Scope Label
     const scopeLabel = useMemo(() => {
-        if (scopeType === 'course') return `Whole Course: ${selectedCourse.title}`;
+        if (scopeType === 'course') return `Course: ${selectedCourse.title}`;
         if (scopeType === 'subject' && selectedSubject) return `Subject: ${selectedSubject.name}`;
-        if (scopeType === 'doc' && selectedDoc) return `Document: ${selectedDoc.filename}`;
+        if (scopeType === 'doc' && selectedDoc) return `PDF: ${selectedDoc.filename}`;
         return selectedCourse.title;
     }, [scopeType, selectedCourse, selectedSubject, selectedDoc]);
 
-    // Send Question
     const handleSend = async (questionText?: string) => {
         const query = (questionText || input).trim();
         if (!query || isStreaming || !isIndexingReady) return;
@@ -197,12 +294,11 @@ const ChatScreen = ({ route, navigation }: any) => {
             if (res && res.data && res.data.answer) {
                 aiText = res.data.answer;
                 citations = [
-                    { page: 2, snippet: 'Directly supported by syllabus chapter overview.' },
-                    { page: 6, snippet: 'Detailed mechanistic derivation and chemical parameters.' },
+                    { page: 2, snippet: 'Directly supported by chapter overview.' },
+                    { page: 6, snippet: 'Detailed mechanistic derivation.' },
                 ];
             } else {
-                // Calm "I couldn't find this in your material" fallback
-                aiText = "I couldn't find this in your material. Make sure your course documents cover this topic, or switch your scope to the whole course.";
+                aiText = "I couldn't find this in your uploaded materials for this subject. Try broadening your query or selecting the whole course scope.";
                 isNotFound = true;
             }
 
@@ -239,7 +335,6 @@ const ChatScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Stop Streaming
     const handleStopStreaming = () => {
         if (abortControllerRef.current) {
             abortControllerRef.current.abort();
@@ -247,14 +342,12 @@ const ChatScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Copy Message Text
     const handleCopy = (msgId: string, text: string) => {
         Clipboard.setString(text);
         setCopiedId(msgId);
         setTimeout(() => setCopiedId(null), 1800);
     };
 
-    // Regenerate last response
     const handleRegenerate = () => {
         if (messages.length < 2) return;
         const lastUserMsg = [...messages].reverse().find((m) => m.sender === 'user');
@@ -263,13 +356,17 @@ const ChatScreen = ({ route, navigation }: any) => {
         }
     };
 
-    // Clear Chat with Confirmation
     const handleConfirmClearChat = async () => {
-        await saveChatHistory(selectedCourse.id, []);
+        setMessages([]);
+        try {
+            await clearChatMessages('course', selectedCourse.id);
+            await AsyncStorage.removeItem(`${TUTOR_HISTORY_PREFIX}${selectedCourse.id}`);
+        } catch (e) {
+            console.warn('Failed to clear chat history:', e);
+        }
         setIsClearChatConfirmOpen(false);
     };
 
-    // Tapping a citation chip opens PDF in Course Hub at that page
     const handleTapCitation = (cit: TutorCitation) => {
         navigation.navigate('courses', {
             courseId: selectedCourse.id,
@@ -287,7 +384,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                 <View style={styles.scopeSelectorContainer}>
                     <Text style={styles.scopePrompt}>Scope:</Text>
                     <TouchableOpacity
-                        style={styles.scopeButton}
+                        style={[styles.scopeButton, { backgroundColor: colors.surfaceRaised, borderColor: colors.border }]}
                         onPress={() => setIsScopePickerOpen(true)}
                         activeOpacity={0.75}
                         accessibilityRole="button"
@@ -296,7 +393,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                         <Text style={styles.scopeButtonText} numberOfLines={1}>
                             {scopeLabel}
                         </Text>
-                        <ChevronDown size={14} color={colors.textMuted} strokeWidth={1.5} style={{ marginLeft: 4 }} />
+                        <ChevronDown size={14} color={colors.textMuted} strokeWidth={2} style={{ marginLeft: 4 }} />
                     </TouchableOpacity>
                 </View>
 
@@ -307,39 +404,39 @@ const ChatScreen = ({ route, navigation }: any) => {
                         accessibilityRole="button"
                         accessibilityLabel="Clear chat history"
                     >
-                        <Trash2 size={16} color={colors.textMuted} strokeWidth={1.5} />
+                        <Trash2 size={18} color={colors.textMuted} strokeWidth={2} />
                     </TouchableOpacity>
                 )}
             </View>
 
-            {/* Main Chat Conversation */}
+            {/* Main Chat Conversation Area */}
             <ScrollView
                 ref={scrollViewRef}
-                style={{ flex: 1 }}
-                contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+                style={styles.messagesScrollView}
+                contentContainerStyle={styles.messagesContent}
                 showsVerticalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
             >
                 {messages.length === 0 ? (
                     <View style={styles.emptyStateContainer}>
                         <View style={[styles.aiIconBubble, { backgroundColor: colors.accentMuted }]}>
-                            <Sparkles size={24} color={colors.accent} strokeWidth={1.5} />
+                            <Sparkles size={28} color={colors.accent} strokeWidth={2.5} />
                         </View>
-                        <Text style={styles.emptyTitle}>AI Tutor</Text>
+                        <Text style={styles.emptyTitle}>AI Study Tutor</Text>
                         <Text style={styles.emptyDescription}>
-                            Ask anything about your courses, subjects, and study documents. Every answer is grounded directly in your notes.
+                            Ask any question about your courses and notes. Every answer is grounded directly in your syllabus with page citations.
                         </Text>
 
-                        <Text style={styles.starterHeader}>Suggested Questions</Text>
+                        <Text style={styles.starterHeader}>Suggested Starter Questions</Text>
                         <View style={styles.starterGrid}>
                             {starterQuestions.map((q, idx) => (
-                                <TouchableOpacity
+                                <TactileCard
                                     key={idx}
-                                    style={[styles.starterCard, shadows.card]}
                                     onPress={() => handleSend(q)}
-                                    activeOpacity={0.7}
+                                    contentStyle={{ padding: 14 }}
                                 >
                                     <Text style={styles.starterText}>{q}</Text>
-                                </TouchableOpacity>
+                                </TactileCard>
                             ))}
                         </View>
                     </View>
@@ -348,7 +445,13 @@ const ChatScreen = ({ route, navigation }: any) => {
                         const isAi = msg.sender === 'ai';
 
                         return (
-                            <View key={msg.id} style={styles.messageRow}>
+                            <View
+                                key={msg.id}
+                                style={[
+                                    styles.messageContainer,
+                                    isAi ? styles.aiMessageContainer : styles.userMessageContainer,
+                                ]}
+                            >
                                 <View style={styles.messageMeta}>
                                     <Text style={styles.messageSender}>
                                         {isAi ? 'AI Tutor' : 'You'}
@@ -356,59 +459,65 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     <Text style={styles.messageTime}>{msg.timestamp}</Text>
                                 </View>
 
-                                {/* Full-width editorial Markdown text with NO heavy dark bubbles */}
                                 <View
                                     style={[
-                                        styles.messageBody,
-                                        msg.isNotFound && styles.notFoundBody,
+                                        styles.messageCard,
+                                        isAi
+                                            ? [styles.aiCard, { backgroundColor: colors.surface, borderColor: colors.border }]
+                                            : [styles.userCard, { backgroundColor: colors.accent, borderColor: colors.buttonEdge }],
+                                        msg.isNotFound && [styles.notFoundCard, { backgroundColor: colors.surfaceRaised, borderLeftColor: colors.warning }],
                                     ]}
                                 >
                                     <Text
                                         style={[
                                             styles.messageText,
-                                            isAi ? styles.aiMessageText : styles.userMessageText,
+                                            isAi ? [styles.aiText, { color: colors.text }] : [styles.userText, { color: colors.textInverse }],
                                             msg.isNotFound && { color: colors.textMuted, fontStyle: 'italic' },
                                         ]}
                                     >
                                         {msg.text}
                                     </Text>
 
-                                    {/* Citation Chips */}
+                                    {/* Citations Row */}
                                     {msg.citations && msg.citations.length > 0 && (
                                         <View style={styles.citationsRow}>
                                             {msg.citations.map((cit, cIdx) => (
                                                 <TouchableOpacity
                                                     key={cIdx}
-                                                    style={styles.citationChip}
+                                                    style={[styles.citationChip, { backgroundColor: colors.accentMuted }]}
                                                     onPress={() => handleTapCitation(cit)}
                                                     activeOpacity={0.75}
                                                 >
-                                                    <BookOpen size={12} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 4 }} />
-                                                    <Text style={styles.citationChipText}>p. {cit.page}</Text>
+                                                    <BookOpen size={12} color={colors.accent} strokeWidth={2} style={{ marginRight: 4 }} />
+                                                    <Text style={[styles.citationChipText, { color: colors.accent }]}>
+                                                        p. {cit.page}
+                                                    </Text>
                                                 </TouchableOpacity>
                                             ))}
                                         </View>
                                     )}
 
-                                    {/* Actions Row (Copy, Regenerate) */}
+                                    {/* AI Message Action Buttons (Copy, Regenerate) */}
                                     {isAi && !msg.isNotFound && (
                                         <View style={styles.msgActionsRow}>
                                             <TouchableOpacity
                                                 style={styles.msgActionBtn}
                                                 onPress={() => handleCopy(msg.id, msg.text)}
+                                                accessibilityLabel="Copy response"
                                             >
                                                 {copiedId === msg.id ? (
                                                     <Check size={14} color={colors.success} />
                                                 ) : (
-                                                    <Copy size={14} color={colors.textMuted} strokeWidth={1.5} />
+                                                    <Copy size={14} color={colors.textMuted} strokeWidth={2} />
                                                 )}
                                             </TouchableOpacity>
 
                                             <TouchableOpacity
                                                 style={styles.msgActionBtn}
                                                 onPress={handleRegenerate}
+                                                accessibilityLabel="Regenerate answer"
                                             >
-                                                <RotateCcw size={14} color={colors.textMuted} strokeWidth={1.5} />
+                                                <RotateCcw size={14} color={colors.textMuted} strokeWidth={2} />
                                             </TouchableOpacity>
                                         </View>
                                     )}
@@ -419,63 +528,67 @@ const ChatScreen = ({ route, navigation }: any) => {
                 )}
 
                 {isStreaming && (
-                    <View style={styles.streamingIndicator}>
-                        <ActivityIndicator size="small" color={colors.accent} />
-                        <Text style={styles.streamingText}>Thinking and checking citations...</Text>
+                    <View style={styles.streamingContainer}>
+                        <View style={[styles.typingBubble, { backgroundColor: colors.surface, borderColor: colors.border }]}>
+                            <TypingDots dotSize={8} color={colors.accent} />
+                        </View>
                     </View>
                 )}
             </ScrollView>
 
-            {/* Composer Bar */}
-            <View style={styles.composerWrapper}>
-                {!isIndexingReady ? (
-                    <View style={styles.indexingNotice}>
-                        <Text style={styles.indexingNoticeText}>
-                            Chat will be ready when indexing finishes.
-                        </Text>
-                    </View>
-                ) : (
-                    <View style={styles.composerContainer}>
-                        <TextInput
-                            style={styles.composerInput}
-                            placeholder="Ask a question about your study materials..."
-                            placeholderTextColor={colors.textMuted}
-                            value={input}
-                            onChangeText={setInput}
-                            onSubmitEditing={() => handleSend()}
-                            multiline
-                        />
+            {/* Bottom Composer Bar */}
+            <Animated.View
+                style={[
+                    styles.composerWrapper,
+                    {
+                        backgroundColor: colors.surface,
+                        borderTopColor: colors.border,
+                        paddingBottom: animBottomPadding,
+                    },
+                ]}
+            >
+                <View style={styles.composerContainer}>
+                    <TextInput
+                        style={[styles.composerInput, { backgroundColor: colors.surfaceRaised, color: colors.text }]}
+                        placeholder="Ask a question about your study material..."
+                        placeholderTextColor={colors.textMuted}
+                        value={input}
+                        onChangeText={setInput}
+                        onSubmitEditing={() => handleSend()}
+                        multiline
+                    />
 
-                        {isStreaming ? (
-                            <TouchableOpacity
-                                style={[styles.composerBtn, { backgroundColor: colors.danger }]}
-                                onPress={handleStopStreaming}
-                                accessibilityRole="button"
-                                accessibilityLabel="Stop generating"
-                            >
-                                <Square size={14} color={colors.textInverse} fill={colors.textInverse} />
-                            </TouchableOpacity>
-                        ) : (
-                            <TouchableOpacity
-                                style={[
-                                    styles.composerBtn,
-                                    { backgroundColor: input.trim() ? colors.accent : colors.surfaceRaised },
-                                ]}
-                                disabled={!input.trim()}
-                                onPress={() => handleSend()}
-                                accessibilityRole="button"
-                                accessibilityLabel="Send question"
-                            >
-                                <Send
-                                    size={16}
-                                    color={input.trim() ? colors.textInverse : colors.textMuted}
-                                    strokeWidth={1.5}
-                                />
-                            </TouchableOpacity>
-                        )}
-                    </View>
-                )}
-            </View>
+                    {isStreaming ? (
+                        <TouchableOpacity
+                            style={[styles.composerBtn, { backgroundColor: colors.danger }]}
+                            onPress={handleStopStreaming}
+                            accessibilityRole="button"
+                            accessibilityLabel="Stop response generation"
+                        >
+                            <Square size={14} color={colors.textInverse} fill={colors.textInverse} />
+                        </TouchableOpacity>
+                    ) : (
+                        <TouchableOpacity
+                            style={[
+                                styles.composerBtn,
+                                {
+                                    backgroundColor: input.trim() ? colors.accent : colors.surfaceRaised,
+                                },
+                            ]}
+                            disabled={!input.trim()}
+                            onPress={() => handleSend()}
+                            accessibilityRole="button"
+                            accessibilityLabel="Send question"
+                        >
+                            <Send
+                                size={16}
+                                color={input.trim() ? colors.textInverse : colors.textMuted}
+                                strokeWidth={2}
+                            />
+                        </TouchableOpacity>
+                    )}
+                </View>
+            </Animated.View>
 
             {/* Scope Selector Modal */}
             <Modal
@@ -489,26 +602,26 @@ const ChatScreen = ({ route, navigation }: any) => {
                     activeOpacity={1}
                     onPress={() => setIsScopePickerOpen(false)}
                 >
-                    <View style={[styles.scopePickerModalCard, shadows.modal]}>
+                    <View style={[styles.scopePickerModalCard, { backgroundColor: colors.surface, borderColor: colors.border }]}>
                         <Text style={styles.scopeModalTitle}>Select Tutor Scope</Text>
 
                         {/* Whole Course Scope */}
                         <TouchableOpacity
                             style={[
                                 styles.scopeOptionRow,
-                                scopeType === 'course' && styles.scopeOptionActive,
+                                scopeType === 'course' && { backgroundColor: colors.accentMuted },
                             ]}
                             onPress={() => {
                                 setScopeType('course');
                                 setIsScopePickerOpen(false);
                             }}
                         >
-                            <Layers size={16} color={colors.accent} strokeWidth={1.5} style={{ marginRight: 10 }} />
+                            <Layers size={18} color={colors.accent} strokeWidth={2} style={{ marginRight: 12 }} />
                             <View style={{ flex: 1 }}>
                                 <Text style={styles.scopeOptionName}>Whole Course</Text>
                                 <Text style={styles.scopeOptionDesc}>{selectedCourse.title}</Text>
                             </View>
-                            {scopeType === 'course' && <Check size={16} color={colors.accent} strokeWidth={2} />}
+                            {scopeType === 'course' && <Check size={18} color={colors.accent} strokeWidth={2.5} />}
                         </TouchableOpacity>
 
                         {/* Subject Scopes */}
@@ -520,7 +633,7 @@ const ChatScreen = ({ route, navigation }: any) => {
                                     key={sub.id}
                                     style={[
                                         styles.scopeOptionRow,
-                                        isSubActive && styles.scopeOptionActive,
+                                        isSubActive && { backgroundColor: colors.accentMuted },
                                     ]}
                                     onPress={() => {
                                         setSelectedSubject(sub);
@@ -528,12 +641,12 @@ const ChatScreen = ({ route, navigation }: any) => {
                                         setIsScopePickerOpen(false);
                                     }}
                                 >
-                                    <BookOpen size={16} color={sub.color || colors.accent} strokeWidth={1.5} style={{ marginRight: 10 }} />
+                                    <BookOpen size={18} color={sub.color || colors.accent} strokeWidth={2} style={{ marginRight: 12 }} />
                                     <View style={{ flex: 1 }}>
                                         <Text style={styles.scopeOptionName}>{sub.name}</Text>
-                                        <Text style={styles.scopeOptionDesc}>{sub.documents.length} documents</Text>
+                                        <Text style={styles.scopeOptionDesc}>{sub.documents.length} materials</Text>
                                     </View>
-                                    {isSubActive && <Check size={16} color={colors.accent} strokeWidth={2} />}
+                                    {isSubActive && <Check size={18} color={colors.accent} strokeWidth={2.5} />}
                                 </TouchableOpacity>
                             );
                         })}
@@ -546,9 +659,9 @@ const ChatScreen = ({ route, navigation }: any) => {
                 visible={isClearChatConfirmOpen}
                 title="Clear Conversation?"
                 message="This will delete the conversation history for this course."
-                confirmText="Clear Chat"
+                confirmText="Clear History"
                 cancelText="Keep"
-                isDestructive={true}
+                isDestructive
                 onConfirm={handleConfirmClearChat}
                 onCancel={() => setIsClearChatConfirmOpen(false)}
             />
@@ -556,7 +669,7 @@ const ChatScreen = ({ route, navigation }: any) => {
     );
 };
 
-const createStyles = (colors: ThemeColors) =>
+const createStyles = (colors: ThemeColors, topGap: number = getStaticSafeTopGap()) =>
     StyleSheet.create({
         container: {
             flex: 1,
@@ -566,11 +679,11 @@ const createStyles = (colors: ThemeColors) =>
             flexDirection: 'row',
             alignItems: 'center',
             justifyContent: 'space-between',
-            paddingTop: Platform.OS === 'ios' ? 48 : 20,
+            paddingTop: topGap,
             paddingBottom: 10,
             paddingHorizontal: 16,
             backgroundColor: colors.surface,
-            borderBottomWidth: 1,
+            borderBottomWidth: 2,
             borderBottomColor: colors.border,
         },
         scopeSelectorContainer: {
@@ -581,22 +694,22 @@ const createStyles = (colors: ThemeColors) =>
         },
         scopePrompt: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '800',
             color: colors.textMuted,
             marginRight: 6,
         },
         scopeButton: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 5,
-            paddingHorizontal: 10,
-            borderRadius: radii.sm,
+            paddingVertical: 6,
+            paddingHorizontal: 12,
+            borderRadius: radii.full,
+            borderWidth: 1.5,
             maxWidth: '85%',
         },
         scopeButtonText: {
             fontSize: typography.sizes.xs,
-            fontWeight: '500',
+            fontWeight: '700',
             color: colors.text,
         },
         clearBtn: {
@@ -604,20 +717,20 @@ const createStyles = (colors: ThemeColors) =>
         },
         emptyStateContainer: {
             alignItems: 'center',
-            paddingTop: 32,
+            paddingTop: 24,
             paddingHorizontal: 12,
         },
         aiIconBubble: {
-            width: 52,
-            height: 52,
-            borderRadius: 26,
+            width: 56,
+            height: 56,
+            borderRadius: 28,
             alignItems: 'center',
             justifyContent: 'center',
             marginBottom: 12,
         },
         emptyTitle: {
-            fontSize: 20,
-            fontWeight: '700',
+            fontSize: typography.sizes.xl,
+            fontWeight: '800',
             color: colors.text,
             marginBottom: 6,
         },
@@ -627,151 +740,149 @@ const createStyles = (colors: ThemeColors) =>
             textAlign: 'center',
             lineHeight: 20,
             maxWidth: 320,
-            marginBottom: 24,
+            marginBottom: 20,
+            fontWeight: '500',
         },
         starterHeader: {
             fontSize: typography.sizes.xs,
-            fontWeight: '700',
-            color: colors.textMuted,
+            fontWeight: '800',
+            color: colors.textSecondary,
             alignSelf: 'flex-start',
             marginBottom: 10,
+            textTransform: 'uppercase',
             letterSpacing: 0.5,
         },
         starterGrid: {
             width: '100%',
-            gap: 8,
-        },
-        starterCard: {
-            backgroundColor: colors.surface,
-            borderRadius: radii.sm,
-            borderWidth: 1,
-            borderColor: colors.border,
-            padding: 12,
         },
         starterText: {
             fontSize: typography.sizes.sm,
             color: colors.text,
-            lineHeight: 18,
+            fontWeight: '600',
+            lineHeight: 20,
         },
-        messageRow: {
-            marginBottom: 20,
+        messageContainer: {
+            marginBottom: 16,
+            width: '100%',
+        },
+        aiMessageContainer: {
+            alignItems: 'flex-start',
+        },
+        userMessageContainer: {
+            alignItems: 'flex-end',
         },
         messageMeta: {
             flexDirection: 'row',
-            justifyContent: 'space-between',
+            gap: 8,
             alignItems: 'center',
             marginBottom: 4,
+            paddingHorizontal: 4,
         },
         messageSender: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '700',
             color: colors.textMuted,
         },
         messageTime: {
             fontSize: 10,
             color: colors.textSubtle,
         },
-        messageBody: {
-            paddingVertical: 2,
+        messageCard: {
+            maxWidth: '88%',
+            borderRadius: radii.xl,
+            padding: 14,
+            borderWidth: 2,
         },
-        notFoundBody: {
-            backgroundColor: colors.surfaceRaised,
-            padding: 12,
-            borderRadius: radii.sm,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.warning,
+        aiCard: {
+            borderBottomLeftRadius: radii.xs,
+        },
+        userCard: {
+            borderBottomRightRadius: radii.xs,
+        },
+        notFoundCard: {
+            borderLeftWidth: 4,
         },
         messageText: {
-            lineHeight: 24,
+            lineHeight: 22,
         },
-        aiMessageText: {
-            fontSize: 16,
-            color: colors.text,
-            fontFamily: typography.fontFamily.sans,
+        aiText: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '500',
         },
-        userMessageText: {
-            fontSize: 16,
-            color: colors.accent,
-            fontWeight: '600',
+        userText: {
+            fontSize: typography.sizes.sm,
+            fontWeight: '700',
         },
         citationsRow: {
             flexDirection: 'row',
             flexWrap: 'wrap',
             gap: 6,
-            marginTop: 8,
+            marginTop: 10,
+            paddingTop: 8,
+            borderTopWidth: 1,
+            borderTopColor: colors.borderLight,
         },
         citationChip: {
             flexDirection: 'row',
             alignItems: 'center',
-            backgroundColor: colors.accentMuted,
             paddingVertical: 4,
             paddingHorizontal: 8,
             borderRadius: radii.xs,
         },
         citationChipText: {
-            fontSize: typography.sizes.xs,
-            fontWeight: '600',
-            color: colors.accent,
+            fontSize: 11,
+            fontWeight: '800',
         },
         msgActionsRow: {
             flexDirection: 'row',
-            gap: 8,
+            gap: 10,
             marginTop: 8,
+            paddingTop: 6,
         },
         msgActionBtn: {
-            padding: 4,
+            padding: 2,
         },
-        streamingIndicator: {
-            flexDirection: 'row',
-            alignItems: 'center',
-            paddingVertical: 8,
-            gap: 8,
+        streamingContainer: {
+            paddingVertical: 4,
+            alignItems: 'flex-start',
         },
-        streamingText: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
+        typingBubble: {
+            borderRadius: radii.xl,
+            borderBottomLeftRadius: radii.xs,
+            borderWidth: 2,
+            paddingHorizontal: 6,
+            paddingVertical: 4,
+        },
+        messagesScrollView: {
+            flex: 1,
+        },
+        messagesContent: {
+            padding: 16,
+            paddingBottom: 24,
         },
         composerWrapper: {
-            position: 'absolute',
-            bottom: 0,
-            left: 0,
-            right: 0,
-            backgroundColor: colors.surface,
-            borderTopWidth: 1,
-            borderTopColor: colors.border,
+            borderTopWidth: 2,
             paddingHorizontal: 16,
-            paddingVertical: 10,
-        },
-        indexingNotice: {
-            backgroundColor: colors.surfaceRaised,
-            paddingVertical: 12,
-            alignItems: 'center',
-            borderRadius: radii.sm,
-        },
-        indexingNoticeText: {
-            fontSize: typography.sizes.xs,
-            color: colors.textMuted,
-            fontWeight: '500',
+            paddingTop: 10,
         },
         composerContainer: {
             flexDirection: 'row',
             alignItems: 'center',
+            gap: 8,
         },
         composerInput: {
             flex: 1,
-            backgroundColor: colors.surfaceRaised,
-            borderRadius: radii.full,
+            borderRadius: radii.xl,
             paddingHorizontal: 16,
             paddingVertical: 10,
             fontSize: typography.sizes.sm,
-            color: colors.text,
-            marginRight: 10,
-            maxHeight: 100,
+            maxHeight: 90,
+            fontWeight: '500',
         },
         composerBtn: {
-            width: 38,
-            height: 38,
-            borderRadius: 19,
+            width: 44,
+            height: 44,
+            borderRadius: 22,
             alignItems: 'center',
             justifyContent: 'center',
         },
@@ -784,44 +895,42 @@ const createStyles = (colors: ThemeColors) =>
         },
         scopePickerModalCard: {
             width: '100%',
-            maxWidth: 360,
-            backgroundColor: colors.surface,
-            borderRadius: radii.xl,
-            borderWidth: 1,
-            borderColor: colors.border,
+            maxWidth: 340,
+            borderRadius: radii.xxl,
+            borderWidth: 2,
             padding: 20,
         },
         scopeModalTitle: {
             fontSize: typography.sizes.md,
-            fontWeight: '700',
+            fontWeight: '800',
             color: colors.text,
-            marginBottom: 12,
+            marginBottom: 14,
         },
         scopeSubheader: {
             fontSize: typography.sizes.xs,
-            fontWeight: '600',
+            fontWeight: '800',
             color: colors.textMuted,
+            textTransform: 'uppercase',
             marginTop: 12,
             marginBottom: 6,
+            letterSpacing: 0.5,
         },
         scopeOptionRow: {
             flexDirection: 'row',
             alignItems: 'center',
-            paddingVertical: 10,
-            paddingHorizontal: 8,
-            borderRadius: radii.sm,
-        },
-        scopeOptionActive: {
-            backgroundColor: colors.surfaceRaised,
+            padding: 10,
+            borderRadius: radii.md,
+            marginBottom: 4,
         },
         scopeOptionName: {
             fontSize: typography.sizes.sm,
-            fontWeight: '600',
+            fontWeight: '800',
             color: colors.text,
         },
         scopeOptionDesc: {
-            fontSize: typography.sizes.xs,
+            fontSize: 11,
             color: colors.textMuted,
+            marginTop: 1,
         },
     });
 
