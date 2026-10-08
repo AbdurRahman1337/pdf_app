@@ -162,7 +162,7 @@ const AuthScreen = ({ navigation }: any) => {
                 <View style={[styles.brandContainer, isKeyboardVisible && { marginBottom: 12 }]}>
                     <View style={styles.logoBadge}>
                         <Image
-                            source={require('../../../../assets/mainicon.jpeg')}
+                            source={require('../../../../assets/newicon.jpeg')}
                             style={styles.logoImage}
                         />
                     </View>
